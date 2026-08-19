@@ -1,8 +1,37 @@
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+APP_DIRECTORY = "FLActivityRecorder"
+
+
+def default_data_directory(
+    *,
+    platform: str | None = None,
+    environment: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> Path:
+    """Return the conventional per-user data directory for the current platform."""
+    current_platform = platform or sys.platform
+    current_environment = environment if environment is not None else os.environ
+    current_home = home or Path.home()
+
+    if current_platform == "win32":
+        local_app_data = current_environment.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / APP_DIRECTORY
+        return current_home / "AppData" / "Local" / APP_DIRECTORY
+    if current_platform == "darwin":
+        return current_home / "Library" / "Application Support" / APP_DIRECTORY
+
+    xdg_data_home = current_environment.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home) / APP_DIRECTORY
+    return current_home / ".local" / "share" / APP_DIRECTORY
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,9 +44,11 @@ class Settings:
 
     @classmethod
     def from_environment(cls) -> Settings:
-        app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".fl-activity-recorder"))
         database = Path(
-            os.environ.get("FL_ACTIVITY_DATABASE", app_data / "FLActivityRecorder" / "activity.db")
+            os.environ.get(
+                "FL_ACTIVITY_DATABASE",
+                default_data_directory() / "activity.db",
+            )
         )
         return cls(
             database_path=database,

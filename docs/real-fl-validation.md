@@ -1,10 +1,12 @@
 # Real FL Studio release validation
 
-Automated tests do not replace this checklist. Run it on Windows with FL Studio 26.1.3+ and loopMIDI before publishing a release.
+Automated tests do not replace this checklist. Run it on both macOS with the IAC Driver
+and Windows with loopMIDI before publishing a cross-platform release.
 
 ## Setup and safety
 
 - [ ] Observer appears as **Activity Recorder (user)** and reports API 42+
+- [ ] Platform setup check finds both virtual MIDI ports
 - [ ] Companion connects within five seconds
 - [ ] Physical MIDI controllers and keyboard input still behave normally
 - [ ] Observer never consumes or modifies incoming user MIDI
@@ -27,10 +29,9 @@ Automated tests do not replace this checklist. Run it on Windows with FL Studio 
 ## Reliability and performance
 
 - [ ] Events appear in the live dashboard within 500 ms
-- [ ] Disconnect loopMIDI and confirm the session becomes interrupted after five seconds
+- [ ] Take the IAC Driver offline or stop loopMIDI and confirm the session becomes interrupted after five seconds
 - [ ] Reconnect and start a new session successfully
 - [ ] Run a representative 30-minute production session without audible glitches
 - [ ] Confirm no material FL Studio CPU increase
 - [ ] Export JSONL, restart the companion, and verify completed sessions remain readable
 - [ ] Corrupt or drop an emulated frame and confirm a diagnostic appears
-
