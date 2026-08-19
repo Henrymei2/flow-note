@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FL Studio Activity Recorder</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">LOCAL SESSION TIMELINE</p>
+      <h1>FL Studio Activity Recorder</h1>
+    </div>
+    <div class="connection" id="connection">
+      <span class="status-dot"></span>
+      <span id="connection-label">Checking FL Studio…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar panel">
+      <div class="record-card">
+        <p class="label">Recording</p>
+        <button class="record-button" id="record-button" disabled>
+          <span class="record-icon"></span><span id="record-label">Start recording</span>
+        </button>
+        <p class="muted" id="record-help">Connect the FL Studio observer to begin.</p>
+      </div>
+
+      <div class="section-heading">
+        <h2>Sessions</h2>
+        <button class="icon-button" id="refresh-sessions" title="Refresh sessions">↻</button>
+      </div>
+      <div id="session-list" class="session-list"></div>
+      <p class="empty muted" id="sessions-empty">No recordings yet.</p>
+    </aside>
+
+    <section class="content">
+      <div class="summary panel" id="summary">
+        <div>
+          <p class="eyebrow" id="session-status">SELECT A SESSION</p>
+          <h2 id="session-title">Your production story will appear here</h2>
+          <p class="muted" id="session-time">Record a session to build a searchable timeline.</p>
+        </div>
+        <div class="summary-actions">
+          <a class="button secondary disabled" id="export-button" href="#">Export JSONL</a>
+          <button class="button danger" id="delete-button" disabled>Delete</button>
+        </div>
+      </div>
+
+      <div class="filters panel">
+        <label>
+          <span>Search</span>
+          <input id="search" type="search" placeholder="Find a track, plugin, or action">
+        </label>
+        <label>
+          <span>Category</span>
+          <select id="category">
+            <option value="">All activity</option>
+            <option>project</option><option>transport</option><option>channel</option>
+            <option>mixer</option><option>pattern</option><option>playlist</option>
+            <option>plugin</option><option>navigation</option><option>undo</option>
+          </select>
+        </label>
+        <label>
+          <span>Confidence</span>
+          <select id="confidence">
+            <option value="">All confidence</option>
+            <option value="exact">Exact</option>
+            <option value="state_diff">State-derived</option>
+            <option value="signal_only">Signal only</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="timeline panel">
+        <div id="event-list"></div>
+        <div class="timeline-empty" id="timeline-empty">
+          <div class="empty-mark">♪</div>
+          <h3>No timeline events</h3>
+          <p class="muted">Choose a session or start recording in FL Studio.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
+

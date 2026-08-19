@@ -1,0 +1,86 @@
+# FL Studio Activity Recorder
+
+A private, local-first timeline of supported semantic activity in FL Studio 26.1.3+ on Windows.
+
+The recorder has two parts:
+
+1. A transparent FL Studio MIDI controller script observes documented host callbacks and state.
+2. A local companion receives those events over virtual MIDI, stores active sessions in SQLite, and serves a dashboard at `http://127.0.0.1:8765`.
+
+No cloud service, telemetry, accessibility hooks, screenshots, keylogging, audio capture, or physical-controller MIDI routing is included.
+
+## What it can record
+
+- Project load lifecycle and project metadata exposed by FL Studio
+- Playback, recording, loop mode, and tempo transitions
+- Channel creation, deletion, replacement, rename, and selection
+- Mixer track state changes
+- Pattern selection and selected-channel step-grid changes
+- Focused windows, browser nodes, and FL hint messages
+- Focused plugin parameter changes when the plugin exposes host parameters
+- Generic Playlist, undo, and redo activity signals
+
+FL Studio does not expose enough information to reconstruct arbitrary Piano Roll notes, Playlist clips, automation points, exact undo descriptions, mouse clicks, or private plugin UI state. The dashboard labels inferred and signal-only events accordingly. See [feasibility.md](docs/feasibility.md).
+
+## Requirements
+
+- Windows 10 or 11
+- FL Studio 26.1.3+ with MIDI scripting API 42+
+- Python 3.12
+- [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html)
+
+## Install
+
+Open PowerShell in this repository and run:
+
+```powershell
+.\scripts\install.ps1
+```
+
+The installer copies the observer to your user Hardware folder and installs the local companion. It deliberately does not install loopMIDI or alter FL Studio settings.
+
+In loopMIDI, create these ports:
+
+- `ActivityRecorder Control`
+- `ActivityRecorder Events`
+
+In FL Studio, open **Options → MIDI settings**:
+
+1. Enable `ActivityRecorder Control` under Input.
+2. Set its Controller type to **Activity Recorder (user)**.
+3. Assign it an unused FL port number, such as `42`.
+4. Enable `ActivityRecorder Events` under Output and assign the same FL port number.
+5. Open **View → Script output** and confirm that Activity Recorder initializes without errors.
+
+Start the companion:
+
+```powershell
+& "$env:LOCALAPPDATA\FLActivityRecorder\.venv\Scripts\fl-activity-recorder.exe"
+```
+
+The dashboard opens locally. Recording begins only after you press **Start recording**.
+
+## Development
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[dev]"
+.\.venv\Scripts\python -m pytest
+.\.venv\Scripts\ruff check .
+.\.venv\Scripts\mypy src
+```
+
+FL Studio is not needed for automated tests. Tests inject fake FL modules and emulate fragmented SysEx messages. A real FL Studio run remains a release requirement; use [real-fl-validation.md](docs/real-fl-validation.md).
+
+## Privacy and deletion
+
+The service binds only to `127.0.0.1`. Sessions remain in `%LOCALAPPDATA%\FLActivityRecorder\activity.db` until deleted from the dashboard. Project titles, channel names, plugin names, and parameter labels are stored; project paths are not collected. See [privacy.md](docs/privacy.md).
+
+## Documentation
+
+- [Feasibility and capture boundaries](docs/feasibility.md)
+- [Protocol](docs/protocol.md)
+- [Privacy](docs/privacy.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Real FL Studio validation](docs/real-fl-validation.md)
+
