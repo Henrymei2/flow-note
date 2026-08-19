@@ -27,6 +27,8 @@ FRAME_OVERHEAD = HEADER_SIZE + 1
 MAX_PLUGIN_PARAMS = 512
 PLUGIN_PARAMS_PER_IDLE = 64
 HEARTBEAT_SECONDS = 1.0
+UNDO_SETTLE_SECONDS = 0.75
+RECENT_EDIT_SECONDS = 0.25
 B64URL_ALPHABET = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 KIND_HELLO = 1
@@ -76,6 +78,11 @@ def _flag(name, default):
     return value if isinstance(value, int) else default
 
 
+def _safe_int(function, default=-1):
+    value = _safe(function, default)
+    return value if isinstance(value, int) else default
+
+
 def _event(category, action, summary, confidence, entity_type=None, entity_key=None, payload=None):
     return {
         "category": category,
@@ -88,23 +95,43 @@ def _event(category, action, summary, confidence, entity_type=None, entity_key=N
     }
 
 
+def _is_irrelevant_undo_hint(hint):
+    normalized = str(hint or "").casefold()
+    if not normalized:
+        return True
+    irrelevant_terms = (
+        "color",
+        "colour",
+        "focus",
+        "rename",
+        "select",
+        "view",
+        "window",
+        "zoom",
+    )
+    return any(term in normalized for term in irrelevant_terms)
+
+
 class ActivityRecorder:
     def __init__(self):
         self.sequence = 0
         self.last_heartbeat = 0.0
         self.dirty_mixer_tracks = []
-        self.dirty_focus = True
         self.dirty_pattern = True
         self.dirty_steps = True
         self.dirty_plugin = True
         self.transport_state = None
-        self.focus_state = None
         self.pattern_state = None
         self.step_state = {}
         self.mixer_state = {}
         self.plugin_state = {}
         self.plugin_scan = None
         self.plugin_dirty_at = 0.0
+        self.undo_state = None
+        self.undo_hints = {}
+        self.pending_undo = None
+        self.edit_revision = 0
+        self.last_explained_edit_at = -1000.0
 
     def send(self, kind, payload):
         self.sequence += 1
@@ -128,7 +155,10 @@ class ActivityRecorder:
                 print("Activity Recorder SysEx error: " + str(error))
                 return
 
-    def emit(self, event):
+    def emit(self, event, explains_edit=False):
+        if explains_edit:
+            self.edit_revision += 1
+            self.last_explained_edit_at = time.monotonic()
         self.send(KIND_EVENT, event)
 
     def initialize(self):
@@ -151,30 +181,18 @@ class ActivityRecorder:
                 },
             )
         self.send(KIND_SNAPSHOT, self.snapshot())
+        self.undo_state = self.read_undo_state()
+        if self.undo_state["position"] >= 0 and self.undo_state["hint"]:
+            self.undo_hints[self.undo_state["position"]] = self.undo_state["hint"]
         self.last_heartbeat = time.monotonic()
 
     def snapshot(self):
-        channel_index = _safe(channels.selectedChannel, -1, 1)
-        pattern_index = _safe(patterns.patternNumber, -1)
         return {
             "project_title": _safe(getattr(general, "getProjectTitle", lambda: ""), ""),
             "project_author": _safe(getattr(general, "getProjectAuthor", lambda: ""), ""),
             "changed_flag": _safe(general.getChangedFlag, 0),
-            "playing": bool(_safe(transport.isPlaying, 0)),
             "recording": bool(_safe(transport.isRecording, 0)),
-            "loop_mode": _safe(transport.getLoopMode, 0),
             "tempo": _safe(mixer.getCurrentTempo, 0.0),
-            "selected_channel": channel_index,
-            "selected_channel_name": _safe(channels.getChannelName, "", channel_index)
-            if channel_index >= 0
-            else "",
-            "selected_pattern": pattern_index,
-            "selected_pattern_name": _safe(patterns.getPatternName, "", pattern_index)
-            if pattern_index >= 0
-            else "",
-            "focused_caption": _safe(ui.getFocusedFormCaption, ""),
-            "focused_form_id": _safe(ui.getFocusedFormID, -1),
-            "focused_plugin": _safe(ui.getFocusedPluginName, ""),
         }
 
     def heartbeat(self, now):
@@ -193,16 +211,14 @@ class ActivityRecorder:
 
     def poll_transport(self):
         current = {
-            "playing": bool(_safe(transport.isPlaying, 0)),
             "recording": bool(_safe(transport.isRecording, 0)),
-            "loop_mode": _safe(transport.getLoopMode, 0),
             "tempo": _safe(mixer.getCurrentTempo, 0.0),
         }
         previous = self.transport_state
         self.transport_state = current
         if previous is None:
             return
-        for key in ("playing", "recording", "loop_mode", "tempo"):
+        for key in ("recording", "tempo"):
             if previous.get(key) != current.get(key):
                 exact = key != "tempo"
                 self.emit(
@@ -214,65 +230,33 @@ class ActivityRecorder:
                         "transport",
                         key,
                         {"before": previous.get(key), "after": current.get(key)},
-                    )
+                    ),
+                    explains_edit=key == "tempo",
                 )
 
     def _transport_summary(self, key, value):
-        if key == "playing":
-            return "Playback started" if value else "Playback stopped"
         if key == "recording":
             return "FL Studio recording enabled" if value else "FL Studio recording disabled"
-        if key == "loop_mode":
-            return "Playback mode changed to " + ("song" if value else "pattern")
         return "Tempo changed to " + str(round(float(value), 2)) + " BPM"
 
-    def poll_focus(self):
-        current = {
-            "form_id": _safe(ui.getFocusedFormID, -1),
-            "caption": _safe(ui.getFocusedFormCaption, ""),
-            "plugin": _safe(ui.getFocusedPluginName, ""),
-            "browser_node": _safe(getattr(ui, "getFocusedNodeCaption", lambda: ""), ""),
-        }
-        previous = self.focus_state
-        self.focus_state = current
-        self.dirty_focus = False
-        if previous is not None and previous != current:
-            label = (
-                current["plugin"] or current["caption"] or current["browser_node"] or "FL Studio"
-            )
-            self.emit(
-                _event(
-                    "navigation",
-                    "focus_changed",
-                    "Focused " + str(label),
-                    "exact",
-                    "window",
-                    str(current["form_id"]),
-                    {"before": previous, "after": current},
-                )
-            )
-
     def poll_pattern(self):
-        index = _safe(patterns.patternNumber, -1)
-        current = {
-            "index": index,
-            "name": _safe(patterns.getPatternName, "", index) if index >= 0 else "",
-            "count": _safe(patterns.patternCount, 0),
-        }
+        current = {"count": _safe(patterns.patternCount, 0)}
         previous = self.pattern_state
         self.pattern_state = current
         self.dirty_pattern = False
-        if previous is not None and previous != current:
+        if previous is not None and previous["count"] != current["count"]:
+            added = current["count"] > previous["count"]
             self.emit(
                 _event(
                     "pattern",
-                    "pattern_changed",
-                    "Pattern state changed",
+                    "created" if added else "deleted",
+                    "Pattern created" if added else "Pattern deleted",
                     "state_diff",
                     "pattern",
-                    str(index),
+                    None,
                     {"before": previous, "after": current},
-                )
+                ),
+                explains_edit=True,
             )
 
     def poll_steps(self):
@@ -299,7 +283,8 @@ class ActivityRecorder:
                     "step_grid",
                     key,
                     {"changed_steps": changed, "before": previous, "after": current},
-                )
+                ),
+                explains_edit=True,
             )
 
     def poll_mixer_track(self):
@@ -309,11 +294,9 @@ class ActivityRecorder:
         if index < 0:
             index = _safe(mixer.trackNumber, 0)
         current = {
-            "name": _safe(mixer.getTrackName, "", index),
             "volume": _safe(mixer.getTrackVolume, 0.0, index),
             "pan": _safe(mixer.getTrackPan, 0.0, index),
             "stereo_separation": _safe(mixer.getTrackStereoSep, 0.0, index),
-            "selected": bool(_safe(mixer.isTrackSelected, 0, index)),
         }
         previous = self.mixer_state.get(index)
         self.mixer_state[index] = current
@@ -331,19 +314,8 @@ class ActivityRecorder:
                     "mixer_track",
                     str(index),
                     {"changes": changed, "state": current},
-                )
-            )
-        elif previous is None:
-            self.emit(
-                _event(
-                    "mixer",
-                    "track_changed",
-                    "Mixer track " + str(index) + " changed",
-                    "signal_only",
-                    "mixer_track",
-                    str(index),
-                    {"state": current},
-                )
+                ),
+                explains_edit=True,
             )
 
     def start_plugin_scan(self):
@@ -357,11 +329,6 @@ class ActivityRecorder:
             if channel_index >= 0:
                 target = ("generator", channel_index, -1, plugin_name)
         if target is None:
-            self.emit(
-                _event(
-                    "plugin", "controls_changed", "Plugin controls changed", "signal_only", "plugin"
-                )
-            )
             self.dirty_plugin = False
             return
         if target[0] == "effect":
@@ -420,16 +387,85 @@ class ActivityRecorder:
                     "plugin",
                     identity,
                     {"changes": changes, "parameter_count": scan["count"]},
-                )
+                ),
+                explains_edit=True,
             )
+
+    def read_undo_state(self):
+        return {
+            "position": _safe_int(getattr(general, "getUndoHistoryPos", lambda: -1)),
+            "count": _safe_int(getattr(general, "getUndoHistoryCount", lambda: -1)),
+            "last": _safe_int(getattr(general, "getUndoHistoryLast", lambda: -1)),
+            "hint": str(_safe(getattr(general, "getUndoLevelHint", lambda: ""), "") or ""),
+        }
+
+    def capture_undo_change(self):
+        now = time.monotonic()
+        previous = self.undo_state
+        current = self.read_undo_state()
+        self.undo_state = current
+        if previous is None:
+            return
+
+        if current["position"] < previous["position"]:
+            action = "undo"
+            hint = previous["hint"] or current["hint"]
+        elif current["position"] > previous["position"] and (
+            current["count"] == previous["count"] and current["last"] == previous["last"]
+        ):
+            hint = current["hint"]
+            known_hint = self.undo_hints.get(current["position"])
+            action = "redo" if known_hint == hint else "edit"
+        else:
+            action = "edit"
+            hint = current["hint"]
+
+        if current["position"] >= 0 and current["hint"]:
+            self.undo_hints[current["position"]] = current["hint"]
+
+        if _is_irrelevant_undo_hint(hint):
+            self.pending_undo = None
+            return
+
+        prefix = "Undo: " if action == "undo" else "Redo: " if action == "redo" else ""
+        self.pending_undo = {
+            "captured_at": now,
+            "edit_revision": self.edit_revision,
+            "recently_explained": now - self.last_explained_edit_at <= RECENT_EDIT_SECONDS,
+            "event": _event(
+                "project_edit",
+                action,
+                prefix + hint,
+                "exact",
+                "undo_history",
+                str(current["position"]),
+                {"hint": hint, "before": previous, "after": current},
+            ),
+        }
+
+    def flush_pending_undo(self, now):
+        pending = self.pending_undo
+        if pending is None or now - pending["captured_at"] < UNDO_SETTLE_SECONDS:
+            return
+        if pending["recently_explained"] or self.edit_revision != pending["edit_revision"]:
+            self.pending_undo = None
+            return
+        if (
+            self.dirty_mixer_tracks
+            or self.dirty_pattern
+            or self.dirty_steps
+            or self.dirty_plugin
+            or self.plugin_scan is not None
+        ):
+            return
+        self.pending_undo = None
+        self.send(KIND_EVENT, pending["event"])
 
     def idle(self):
         now = time.monotonic()
         self.heartbeat(now)
         self.poll_transport()
-        if self.dirty_focus:
-            self.poll_focus()
-        elif self.dirty_mixer_tracks:
+        if self.dirty_mixer_tracks:
             self.poll_mixer_track()
         elif self.dirty_pattern:
             self.poll_pattern()
@@ -437,6 +473,7 @@ class ActivityRecorder:
             self.poll_steps()
         else:
             self.poll_plugin()
+        self.flush_pending_undo(now)
 
 
 RECORDER = ActivityRecorder()
@@ -468,13 +505,30 @@ def OnProjectLoad(status):
     )
     if status == 100:
         RECORDER.send(KIND_SNAPSHOT, RECORDER.snapshot())
+        RECORDER.undo_state = RECORDER.read_undo_state()
+        RECORDER.undo_hints = {}
+        if RECORDER.undo_state["position"] >= 0 and RECORDER.undo_state["hint"]:
+            RECORDER.undo_hints[RECORDER.undo_state["position"]] = RECORDER.undo_state["hint"]
+        RECORDER.pending_undo = None
+        RECORDER.transport_state = None
+        RECORDER.pattern_state = None
+        RECORDER.step_state = {}
+        RECORDER.mixer_state = {}
+        RECORDER.plugin_state = {}
+        RECORDER.plugin_scan = None
+        RECORDER.dirty_plugin = True
+        RECORDER.plugin_dirty_at = 0.0
         RECORDER.dirty_pattern = True
         RECORDER.dirty_steps = True
 
 
 def OnDirtyChannel(index, flag):
-    actions = {0: "created", 1: "deleted", 2: "replaced", 3: "renamed", 4: "selected"}
-    action = actions.get(flag, "changed")
+    actions = {0: "created", 1: "deleted", 2: "replaced"}
+    action = actions.get(flag)
+    if action is None:
+        if flag == 4:
+            RECORDER.dirty_steps = True
+        return
     name = _safe(channels.getChannelName, "", index, True) if index >= 0 else ""
     RECORDER.emit(
         _event(
@@ -485,7 +539,8 @@ def OnDirtyChannel(index, flag):
             "channel",
             str(index),
             {"flag": flag, "name": name},
-        )
+        ),
+        explains_edit=True,
     )
     RECORDER.dirty_steps = True
 
@@ -496,36 +551,14 @@ def OnDirtyMixerTrack(index):
 
 
 def OnRefresh(flags):
-    if flags & _flag("HW_Dirty_FocusedWindow", 32):
-        RECORDER.dirty_focus = True
     if flags & _flag("HW_Dirty_Patterns", 1024):
         RECORDER.dirty_pattern = True
         RECORDER.dirty_steps = True
-    if flags & _flag("HW_Dirty_Tracks", 2048):
-        RECORDER.emit(
-            _event(
-                "playlist",
-                "playlist_changed",
-                "Playlist content or tracks changed",
-                "signal_only",
-                "playlist",
-                payload={"refresh_flags": flags},
-            )
-        )
     if flags & _flag("HW_Dirty_ControlValues", 4096):
         RECORDER.dirty_plugin = True
         RECORDER.plugin_dirty_at = time.monotonic()
     if flags & _flag("HW_Dirty_Undo", 131072):
-        RECORDER.emit(
-            _event(
-                "undo",
-                "history_changed",
-                "Undo or redo history changed",
-                "signal_only",
-                "undo_history",
-                payload={"refresh_flags": flags},
-            )
-        )
+        RECORDER.capture_undo_change()
 
 
 def OnUpdateBeatIndicator(value):
@@ -534,16 +567,8 @@ def OnUpdateBeatIndicator(value):
 
 
 def OnSendTempMsg(message, duration):
-    RECORDER.emit(
-        _event(
-            "navigation",
-            "hint",
-            str(message),
-            "signal_only",
-            "hint",
-            payload={"duration_ms": duration},
-        )
-    )
+    # Hint-bar and navigation messages do not describe musical changes.
+    pass
 
 
 def OnIdle():

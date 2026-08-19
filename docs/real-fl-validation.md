@@ -16,14 +16,16 @@ and Windows with loopMIDI before publishing a cross-platform release.
 ## Capture scenarios
 
 - [ ] Load, fail to load, and replace a project
-- [ ] Start/stop playback; toggle recording and song/pattern mode; change tempo
-- [ ] Create, delete, replace, rename, and select channels
+- [ ] Start/stop playback and change window focus; confirm neither produces timeline noise
+- [ ] Toggle recording and change tempo
+- [ ] Create, delete, and replace channels; confirm rename and selection are ignored
 - [ ] Toggle steps in the selected channel and pattern
-- [ ] Change mixer volume, pan, stereo separation, selection, and track name
-- [ ] Focus Channel Rack, Playlist, Piano Roll, Mixer, Browser, and plugins
+- [ ] Change mixer volume, pan, and stereo separation; confirm selection and track names are ignored
+- [ ] Focus Channel Rack, Playlist, Piano Roll, Mixer, and Browser; confirm focus is ignored
 - [ ] Change exposed parameters in a native and a third-party plugin
-- [ ] Edit Playlist clips and Piano Roll notes and confirm they are labeled signal-only
-- [ ] Perform undo and redo and confirm history activity is labeled signal-only
+- [ ] Edit Playlist clips and Piano Roll notes and confirm FL Studio's undo label is recorded
+- [ ] Perform undo and redo and confirm direction and FL Studio's action label are recorded
+- [ ] Confirm a supported state diff suppresses its duplicate undo-label entry
 - [ ] Stop recording and confirm later activity is not persisted
 
 ## Reliability and performance

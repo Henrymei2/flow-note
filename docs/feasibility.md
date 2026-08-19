@@ -10,9 +10,18 @@ The continuous-script sandbox is expected to block file and socket writes. The o
 
 | Confidence | Meaning | Examples |
 | --- | --- | --- |
-| Exact | FL emitted a callback that names the operation or state transition | Project load, channel rename, focus, play/stop |
+| Exact | FL emitted a callback that names the operation or state transition | Project load, channel creation/deletion, recording state, named undo/redo action |
 | State-derived | A refresh signal caused a supported before/after state comparison | Tempo, mixer controls, steps, focused plugin parameters |
-| Signal-only | FL reported that an area changed without exposing the changed object | Playlist edits, undo/redo history, inaccessible plugin controls |
+| Signal-only | FL reported that an area changed without exposing useful detail | Not persisted; vague refresh-only activity is discarded |
+
+The observer reads `general.getUndoLevelHint()` together with the undo history position,
+count, and last position. This distinguishes new edits, undo, and redo and preserves FL
+Studio's own action label. It does not expose the affected notes, clips, automation points,
+or complete before/after state. When a supported state comparison explains the same edit,
+the separate undo label is suppressed.
+
+Window focus, Browser and hint-bar activity, item selection, colors, renames, playback
+navigation, and generic Playlist refreshes are intentionally not recorded.
 
 ## Known unavailable data
 
@@ -20,7 +29,7 @@ The continuous-script sandbox is expected to block file and socket writes. The o
 - Raw performance MIDI from unrelated physical controller ports
 - Arbitrary Piano Roll note objects and complete note histories
 - Playlist clip placement, movement, trimming, or per-clip properties
-- Automation point geometry and exact undo-history descriptions
+- Automation point geometry and object-level data behind undo-history descriptions
 - Audio samples, waveform data, or meter streams
 - State internal to a third-party plugin that is not exposed as host parameters
 - Project file paths
@@ -35,4 +44,3 @@ The product must never imply that a signal-only event describes the exact edit.
 - Process at most 64 plugin parameters per idle callback and 512 per focused plugin.
 - Coalesce host refreshes and retain the final before/after state.
 - Surface missing SysEx sequence numbers instead of hiding event loss.
-

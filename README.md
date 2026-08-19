@@ -13,15 +13,19 @@ No cloud service, telemetry, accessibility hooks, screenshots, keylogging, audio
 ## What it can record
 
 - Project load lifecycle and project metadata exposed by FL Studio
-- Playback, recording, loop mode, and tempo transitions
-- Channel creation, deletion, replacement, rename, and selection
-- Mixer track state changes
-- Pattern selection and selected-channel step-grid changes
-- Focused windows, browser nodes, and FL hint messages
+- Recording and tempo transitions
+- Channel creation, deletion, and replacement
+- Audible mixer control changes
+- Pattern creation/deletion and selected-channel step-grid changes
 - Focused plugin parameter changes when the plugin exposes host parameters
-- Generic Playlist, undo, and redo activity signals
+- FL Studio's own action label for relevant edits, undo, and redo when no more specific
+  supported state difference is available
 
-FL Studio does not expose enough information to reconstruct arbitrary Piano Roll notes, Playlist clips, automation points, exact undo descriptions, mouse clicks, or private plugin UI state. The dashboard labels inferred and signal-only events accordingly. See [feasibility.md](docs/feasibility.md).
+The observer deliberately ignores window focus, tab and item selection, Browser activity,
+hint messages, colors, renames, playback navigation, and other activity that does not change
+the music. FL Studio does not expose enough information to reconstruct arbitrary Piano Roll
+notes, Playlist clips, automation points, or private plugin UI state. Undo labels describe the
+operation but not its complete before/after data. See [feasibility.md](docs/feasibility.md).
 
 ## Requirements
 

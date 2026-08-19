@@ -27,7 +27,9 @@ Update to FL Studio 26.1.3 or newer. The recorder requires MIDI scripting API 42
 
 ## Timeline shows a generic change
 
-This is expected when FL Studio provides a dirty signal but no object-level read API. The event is labeled `signal only`. Piano Roll notes, Playlist clips, automation points, and some plugin controls cannot be reconstructed.
+FL Studio's undo label can name an operation without exposing its changed objects. The recorder
+keeps that label only when no supported state comparison explains the edit. Piano Roll notes,
+Playlist clips, automation points, and some plugin controls cannot be reconstructed live.
 
 ## Missing events diagnostic
 
