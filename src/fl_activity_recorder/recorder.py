@@ -10,6 +10,7 @@ from typing import Any
 from . import __version__
 from .database import Database
 from .models import ActivityEvent
+from .observer_contract import OBSERVER_BUILD, OBSERVER_SCHEMA, OBSERVER_VERSION
 from .protocol import DecodedMessage, MessageKind
 
 MINIMUM_API_VERSION = 42
@@ -39,8 +40,18 @@ class Recorder:
 
     @property
     def compatible(self) -> bool:
+        return self.compatibility_reason is None
+
+    @property
+    def compatibility_reason(self) -> str | None:
         api_version = self.hello.get("api_version")
-        return isinstance(api_version, int) and api_version >= MINIMUM_API_VERSION
+        if not isinstance(api_version, int) or api_version < MINIMUM_API_VERSION:
+            return "api_unsupported"
+        if self.hello.get("observer_schema") != OBSERVER_SCHEMA:
+            return "observer_schema_mismatch"
+        if self.hello.get("observer_build") != OBSERVER_BUILD:
+            return "observer_outdated"
+        return None
 
     def health(self) -> dict[str, Any]:
         age = None
@@ -49,7 +60,13 @@ class Recorder:
         return {
             "connected": self.connected,
             "compatible": self.compatible,
+            "compatibility_reason": self.compatibility_reason,
             "minimum_api_version": MINIMUM_API_VERSION,
+            "required_observer": {
+                "version": OBSERVER_VERSION,
+                "schema": OBSERVER_SCHEMA,
+                "build": OBSERVER_BUILD,
+            },
             "heartbeat_age_seconds": age,
             "active_session_id": self.active_session_id,
             "observer": dict(self.hello),
@@ -62,8 +79,14 @@ class Recorder:
             if not self.connected:
                 raise RuntimeError("FL Studio observer is not connected")
             if not self.compatible:
+                reason = self.compatibility_reason
+                if reason == "api_unsupported":
+                    raise RuntimeError(
+                        f"FL Studio MIDI scripting API {MINIMUM_API_VERSION}+ is required"
+                    )
                 raise RuntimeError(
-                    f"FL Studio MIDI scripting API {MINIMUM_API_VERSION}+ is required"
+                    "The FL Studio observer is out of date. Reinstall it and reload the "
+                    f"script (required build: {OBSERVER_BUILD})."
                 )
             session = self.database.create_session(
                 project_title=_string_or_none(
@@ -72,6 +95,8 @@ class Recorder:
                 fl_version=_string_or_none(self.hello.get("fl_version")),
                 api_version=_int_or_none(self.hello.get("api_version")),
                 recorder_version=__version__,
+                observer_version=_string_or_none(self.hello.get("observer_version")),
+                observer_build=_string_or_none(self.hello.get("observer_build")),
             )
             self.active_session_id = str(session["id"])
             initial = ActivityEvent(
@@ -108,6 +133,29 @@ class Recorder:
     def ingest(self, message: DecodedMessage) -> None:
         now = time.monotonic()
         with self._lock:
+            if message.kind is MessageKind.HELLO:
+                restarted = self.last_sequence is not None
+                if restarted and self.active_session_id is not None:
+                    restarted_session_id = self.active_session_id
+                    self.database.add_diagnostic(
+                        session_id=restarted_session_id,
+                        level="warning",
+                        code="observer_restarted",
+                        message="The FL Studio observer restarted during recording",
+                        payload={
+                            "previous_sequence": self.last_sequence,
+                            "new_sequence": message.sequence,
+                            "previous_observer": dict(self.hello),
+                            "new_observer": dict(message.payload),
+                        },
+                    )
+                    self.stop_session(restarted_session_id, interrupted=True)
+                self.last_sequence = message.sequence
+                self.hello = dict(message.payload)
+                self.last_heartbeat = now
+                self.latest_snapshot = {}
+                self._publish({"type": "health", "health": self.health()})
+                return
             if self.last_sequence is not None:
                 if message.sequence > self.last_sequence + 1:
                     missing = message.sequence - self.last_sequence - 1
@@ -128,11 +176,6 @@ class Recorder:
                     )
                     return
             self.last_sequence = message.sequence
-            if message.kind is MessageKind.HELLO:
-                self.hello = dict(message.payload)
-                self.last_heartbeat = now
-                self._publish({"type": "health", "health": self.health()})
-                return
             if message.kind is MessageKind.HEARTBEAT:
                 self.last_heartbeat = now
                 for key in ("project_title", "fl_version", "api_version"):

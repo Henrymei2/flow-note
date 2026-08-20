@@ -22,15 +22,25 @@ mkdir -p "$INSTALL_ROOT"
 "$PYTHON" -m venv "$INSTALL_ROOT/.venv"
 VENV_PYTHON="$INSTALL_ROOT/.venv/bin/python"
 "$VENV_PYTHON" -m pip install --upgrade pip
-"$VENV_PYTHON" -m pip install "$REPO_ROOT"
+"$VENV_PYTHON" -m pip install --upgrade "$REPO_ROOT"
+INSTALLED_CONTRACT=$("$VENV_PYTHON" -c 'from fl_activity_recorder import __version__; from fl_activity_recorder.observer_contract import OBSERVER_BUILD, OBSERVER_SCHEMA; print("companion={} schema={} build={}".format(__version__, OBSERVER_SCHEMA, OBSERVER_BUILD))')
 
 HARDWARE_ROOT="$FL_USER_DATA_ROOT/Settings/Hardware/ActivityRecorder"
 mkdir -p "$HARDWARE_ROOT"
 cp "$REPO_ROOT/fl_studio/ActivityRecorder/device_ActivityRecorder.py" \
     "$HARDWARE_ROOT/device_ActivityRecorder.py"
 
+SOURCE_HASH=$(shasum -a 256 "$REPO_ROOT/fl_studio/ActivityRecorder/device_ActivityRecorder.py" | awk '{print $1}')
+INSTALLED_HASH=$(shasum -a 256 "$HARDWARE_ROOT/device_ActivityRecorder.py" | awk '{print $1}')
+if [ "$SOURCE_HASH" != "$INSTALLED_HASH" ]; then
+    echo "Observer checksum verification failed." >&2
+    exit 1
+fi
+
 echo
 echo "The companion and FL Studio observer are installed."
+echo "Companion contract: $INSTALLED_CONTRACT"
+echo "Observer checksum: $INSTALLED_HASH"
 echo "This installer does not change Audio MIDI Setup or FL Studio settings."
 echo
 if ! "$VENV_PYTHON" -m fl_activity_recorder.setup_check; then
@@ -39,5 +49,7 @@ if ! "$VENV_PYTHON" -m fl_activity_recorder.setup_check; then
 fi
 echo
 echo "Next: follow the macOS MIDI Settings steps in README.md."
+echo "If FL Studio is open, reload Activity Recorder in View > Script output or restart FL Studio."
+echo "Stop any dashboard process that was already running, then start it again with the command below."
 echo "Run the dashboard with:"
 echo "  $INSTALL_ROOT/.venv/bin/fl-activity-recorder"

@@ -21,16 +21,27 @@ function renderHealth() {
   const health = state.health || {};
   const connected = Boolean(health.connected && health.compatible);
   $("connection").classList.toggle("connected", connected);
+  const compatibilityLabels = {
+    api_unsupported: "Unsupported FL Studio API",
+    observer_schema_mismatch: "FL observer schema mismatch",
+    observer_outdated: "FL observer update required",
+  };
   $("connection-label").textContent = !health.connected
     ? "FL Studio disconnected"
-    : health.compatible ? `FL Studio connected · API ${health.observer?.api_version}` : "Unsupported FL API";
+    : health.compatible
+      ? `FL Studio connected · observer ${health.observer?.observer_build}`
+      : compatibilityLabels[health.compatibility_reason] || "Incompatible FL observer";
   const active = health.active_session_id;
   $("record-button").disabled = !connected;
   $("record-button").classList.toggle("recording", Boolean(active));
   $("record-label").textContent = active ? "Stop recording" : "Start recording";
   $("record-help").textContent = active
     ? "Your local timeline is recording."
-    : connected ? "Recording starts only when you choose." : "Connect the FL Studio observer to begin.";
+    : connected
+      ? "Recording starts only when you choose."
+      : health.connected && health.compatibility_reason
+        ? `Reinstall and reload Activity Recorder. Required build: ${health.required_observer?.build || "current"}.`
+        : "Connect the FL Studio observer to begin.";
 }
 
 function formatDate(value) {
@@ -95,7 +106,18 @@ async function loadSessions() {
   renderSessions(); renderSelected();
 }
 async function selectSession(session) {
-  state.selected = session; renderSessions(); renderSelected(); await loadEvents();
+  state.selected = session; renderSessions(); renderSelected();
+  await Promise.all([loadCategories(), loadEvents()]);
+}
+async function loadCategories() {
+  const select = $("category");
+  const selected = select.value;
+  const categories = state.selected
+    ? await request(`/api/sessions/${state.selected.id}/categories`)
+    : [];
+  select.replaceChildren(new Option("All activity", ""));
+  for (const category of categories) select.append(new Option(category, category));
+  select.value = categories.includes(selected) ? selected : "";
 }
 async function loadEvents() {
   if (!state.selected) return;
@@ -114,7 +136,7 @@ $("record-button").addEventListener("click", async () => {
       toast("Recording stopped");
     } else {
       const session = await request("/api/sessions", { method: "POST" });
-      state.selected = session; toast("Recording started");
+      state.selected = session; await loadCategories(); toast("Recording started");
     }
     await Promise.all([loadHealth(), loadSessions()]);
     if (state.selected) await loadEvents();
@@ -135,9 +157,13 @@ live.onmessage = async (message) => {
   const item = JSON.parse(message.data);
   if (item.health) { state.health = item.health; renderHealth(); }
   if (["session_started", "session_stopped"].includes(item.type)) await Promise.all([loadHealth(), loadSessions()]);
-  if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); renderEvents(); }
+  if (item.type === "event" && state.selected?.id === item.event.session_id) {
+    state.events.unshift(item.event); renderEvents();
+    if (![...$("category").options].some((option) => option.value === item.event.category)) {
+      $("category").append(new Option(item.event.category, item.event.category));
+    }
+  }
 };
 live.onerror = () => { $("connection").classList.remove("connected"); };
 
 Promise.all([loadHealth(), loadSessions()]).catch((error) => toast(error.message));
-

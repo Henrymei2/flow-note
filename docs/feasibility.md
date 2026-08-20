@@ -10,18 +10,21 @@ The continuous-script sandbox is expected to block file and socket writes. The o
 
 | Confidence | Meaning | Examples |
 | --- | --- | --- |
-| Exact | FL emitted a callback that names the operation or state transition | Project load, channel creation/deletion, recording state, named undo/redo action |
-| State-derived | A refresh signal caused a supported before/after state comparison | Tempo, mixer controls, steps, focused plugin parameters |
-| Signal-only | FL reported that an area changed without exposing useful detail | Not persisted; vague refresh-only activity is discarded |
+| Exact | FL emitted a callback that names the operation or state transition | Project load, channel creation/deletion/rename/selection, mixer selection |
+| State-derived | A refresh or bounded safety poll caused a supported before/after comparison | Playback, tempo, pattern selection, mixer controls, metadata, steps, focused plugin parameters, undo direction |
+| Signal-only | FL reported that an area changed without exposing the changed object | Playlist edits, hint messages, inaccessible plugin controls |
 
 The observer reads `general.getUndoLevelHint()` together with the undo history position,
-count, and last position. This distinguishes new edits, undo, and redo and preserves FL
-Studio's own action label. It does not expose the affected notes, clips, automation points,
-or complete before/after state. When a supported state comparison explains the same edit,
-the separate undo label is suppressed.
+count, and last position after the values stabilize. This derives new edits, undo, and redo and
+preserves FL Studio's action label. Direction remains state-derived because the callback itself
+only says that history changed. It does not expose affected notes, clips, automation points, or
+complete before/after state.
 
 Window focus, Browser and hint-bar activity, item selection, colors, renames, playback
-navigation, and generic Playlist refreshes are intentionally not recorded.
+navigation, and generic Playlist refreshes are intentionally recorded. Beat indicators, meters,
+LED refreshes, and other high-frequency rendering or audio-rate signals remain excluded. Other
+official host refresh flags are retained with their raw bitmask and decoded names even when FL
+Studio does not expose the changed object.
 
 ## Known unavailable data
 

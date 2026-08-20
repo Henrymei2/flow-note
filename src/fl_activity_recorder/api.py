@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import __version__
 from .config import Settings
 from .database import Database
 from .midi_receiver import MidiReceiver
@@ -43,7 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 receiver.stop()
             database.close()
 
-    app = FastAPI(title="FL Studio Activity Recorder", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="FL Studio Activity Recorder", version=__version__, lifespan=lifespan)
     app.state.database = database
     app.state.recorder = recorder
     app.state.settings = resolved
@@ -101,6 +102,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             limit=limit,
             offset=offset,
         )
+
+    @app.get("/api/sessions/{session_id}/categories")
+    async def list_event_categories(session_id: str) -> list[str]:
+        try:
+            database.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        return database.list_event_categories(session_id)
 
     @app.get("/api/sessions/{session_id}/export")
     async def export_session(session_id: str) -> StreamingResponse:

@@ -13,19 +13,23 @@ No cloud service, telemetry, accessibility hooks, screenshots, keylogging, audio
 ## What it can record
 
 - Project load lifecycle and project metadata exposed by FL Studio
-- Recording and tempo transitions
-- Channel creation, deletion, and replacement
-- Audible mixer control changes
-- Pattern creation/deletion and selected-channel step-grid changes
+- Playback, recording, loop mode, and tempo transitions
+- Channel creation, deletion, replacement, rename, and selection
+- Mixer track state, including names, colors, values, and selection
+- Pattern state, selection, and selected-channel step-grid changes
+- Focused windows, Browser nodes, and FL hint messages
 - Focused plugin parameter changes when the plugin exposes host parameters
-- FL Studio's own action label for relevant edits, undo, and redo when no more specific
-  supported state difference is available
+- Generic Playlist and otherwise inaccessible plugin refresh signals
+- Additional host refreshes for mixer display/selection, names, colors, remote links,
+  Channel Rack groups/events, performance layout, and Graph Editor changes
+- FL Studio's own action label and history state for edits, undo, and redo
 
-The observer deliberately ignores window focus, tab and item selection, Browser activity,
-hint messages, colors, renames, playback navigation, and other activity that does not change
-the music. FL Studio does not expose enough information to reconstruct arbitrary Piano Roll
-notes, Playlist clips, automation points, or private plugin UI state. Undo labels describe the
-operation but not its complete before/after data. See [feasibility.md](docs/feasibility.md).
+The observer favors completeness and retains software-level navigation and state changes even
+when they do not directly alter the sound. Named undo events and supported before/after state
+diffs are both kept because they provide complementary context. High-frequency beat indicators,
+meters, and audio-rate data are excluded. FL Studio still does not expose enough information to
+reconstruct arbitrary Piano Roll notes, Playlist clips, automation points, or private plugin UI
+state. See [feasibility.md](docs/feasibility.md).
 
 ## Requirements
 
@@ -66,6 +70,7 @@ In FL Studio, open **Options → MIDI settings**:
    the same FL port number.
 5. Leave the Events bus disabled under Input and the Control bus disabled under Output.
 6. Open **View → Script output** and confirm that Activity Recorder initializes.
+   It must print `schema=2 build=event-capture-v2`.
 
 Start the companion:
 
@@ -97,6 +102,7 @@ In FL Studio, open **Options → MIDI settings**:
 3. Assign it an unused FL port number, such as `42`.
 4. Enable `ActivityRecorder Events` under Output and assign the same FL port number.
 5. Open **View → Script output** and confirm that Activity Recorder initializes without errors.
+   It must print `schema=2 build=event-capture-v2`.
 
 Start the companion:
 
@@ -105,6 +111,17 @@ Start the companion:
 ```
 
 The dashboard opens locally. Recording begins only after you press **Start recording**.
+
+The companion blocks recording when FL Studio is still running an older observer. Run the
+installer again, then reload Activity Recorder from **View → Script output** or restart FL Studio.
+
+To check a real-FL JSONL export against the supported event catalog:
+
+```sh
+fl-activity-validate /path/to/session.jsonl
+```
+
+The report lists observed and missing event classes, confidence levels, and callback provenance.
 
 ## Development
 
@@ -123,7 +140,9 @@ Build a standalone executable with `scripts/build-macos.sh` on macOS or
 `scripts/build.ps1` on Windows. PyInstaller artifacts are platform-specific and must
 be built on the operating system where they will run.
 
-FL Studio is not needed for automated tests. Tests inject fake FL modules and emulate fragmented SysEx messages. A real FL Studio run remains a release requirement; use [real-fl-validation.md](docs/real-fl-validation.md).
+FL Studio is not needed for automated tests. Tests inject fake FL modules and emulate fragmented
+SysEx messages. A real FL Studio run on both platforms remains a release requirement; use
+[real-fl-validation.md](docs/real-fl-validation.md).
 
 ## Privacy and deletion
 

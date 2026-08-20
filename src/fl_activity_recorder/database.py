@@ -49,7 +49,9 @@ class Database:
                     project_title TEXT,
                     fl_version TEXT,
                     api_version INTEGER,
-                    recorder_version TEXT NOT NULL
+                    recorder_version TEXT NOT NULL,
+                    observer_version TEXT,
+                    observer_build TEXT
                 );
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +83,13 @@ class Database:
                 );
                 """
             )
+            columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            if "observer_version" not in columns:
+                connection.execute("ALTER TABLE sessions ADD COLUMN observer_version TEXT")
+            if "observer_build" not in columns:
+                connection.execute("ALTER TABLE sessions ADD COLUMN observer_build TEXT")
             connection.execute(
                 "UPDATE sessions SET status='interrupted', ended_at=? WHERE status='recording'",
                 (utc_now(),),
@@ -93,6 +102,8 @@ class Database:
         fl_version: str | None,
         api_version: int | None,
         recorder_version: str,
+        observer_version: str | None = None,
+        observer_build: str | None = None,
     ) -> dict[str, Any]:
         session_id = str(uuid.uuid4())
         started_at = utc_now()
@@ -100,8 +111,8 @@ class Database:
             connection.execute(
                 """INSERT INTO sessions
                    (id, started_at, status, project_title, fl_version,
-                    api_version, recorder_version)
-                   VALUES (?, ?, 'recording', ?, ?, ?, ?)""",
+                    api_version, recorder_version, observer_version, observer_build)
+                   VALUES (?, ?, 'recording', ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     started_at,
@@ -109,6 +120,8 @@ class Database:
                     fl_version,
                     api_version,
                     recorder_version,
+                    observer_version,
+                    observer_build,
                 ),
             )
         return self.get_session(session_id)
@@ -218,6 +231,14 @@ class Database:
         with self._lock:
             rows = self._connection.execute(query, arguments).fetchall()
         return [_decode_event_row(row) for row in rows]
+
+    def list_event_categories(self, session_id: str) -> list[str]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT DISTINCT category FROM events WHERE session_id=? ORDER BY category",
+                (session_id,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
     def add_diagnostic(
         self,

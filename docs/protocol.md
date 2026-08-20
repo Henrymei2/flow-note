@@ -21,3 +21,7 @@ The companion reassembles chunks by kind, sequence, count, and CRC. Conflicting 
 
 The observer emits a heartbeat once per second. Five seconds without a heartbeat marks an active recording as interrupted.
 
+`HELLO` includes the FL/API versions plus `observer_version`, `observer_schema`,
+`observer_build`, and the supported capability names. Protocol framing remains version 1;
+observer schema 2 describes the repaired event catalog and trigger-provenance payloads. The
+companion refuses to start a session unless the observer schema and build match.

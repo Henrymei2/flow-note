@@ -31,3 +31,12 @@ def test_iac_driver_port_names_are_recognized() -> None:
 def test_macos_setup_hint_uses_iac_driver() -> None:
     assert "IAC Driver" in setup_hint("darwin")
     assert "loopMIDI" not in setup_hint("darwin")
+
+
+def test_installers_verify_observer_and_require_reload() -> None:
+    root = Path(__file__).parents[1]
+    macos = (root / "scripts" / "install-macos.sh").read_text(encoding="utf-8")
+    windows = (root / "scripts" / "install.ps1").read_text(encoding="utf-8")
+    assert "checksum" in macos.lower() and "reload Activity Recorder" in macos
+    assert "checksum" in windows.lower() and "reload Activity Recorder" in windows
+    assert "companion=" in macos and "companion=" in windows

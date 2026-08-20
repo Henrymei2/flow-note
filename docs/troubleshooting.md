@@ -9,6 +9,17 @@
 5. Check **View → Script output** for observer errors.
 6. Restart the companion after changing virtual MIDI ports.
 
+## Dashboard says the observer must be updated
+
+Run the platform installer again and verify its source/destination checksum succeeds. In FL
+Studio, reload Activity Recorder from **View → Script output** or restart FL Studio. Script Output
+and dashboard health must both show `schema=2 build=event-capture-v2`. Recording is intentionally
+blocked while an older observer is active.
+
+The installer must also print `companion=0.2.1`. Stop any dashboard process that was running
+before the install and launch it again; an already-running Python process cannot load upgraded
+companion code from disk.
+
 Run the setup check with the installed companion's Python:
 
 ```sh
@@ -28,8 +39,12 @@ Update to FL Studio 26.1.3 or newer. The recorder requires MIDI scripting API 42
 ## Timeline shows a generic change
 
 FL Studio's undo label can name an operation without exposing its changed objects. The recorder
-keeps that label only when no supported state comparison explains the edit. Piano Roll notes,
-Playlist clips, automation points, and some plugin controls cannot be reconstructed live.
+keeps that label as well as any supported state comparison for the same edit. Piano Roll notes,
+Playlist clips, automation points, and some plugin controls cannot be reconstructed live, so
+their refresh events remain generic.
+
+Run `fl-activity-validate session.jsonl` after the validation session to distinguish genuinely
+missing event classes from signal-only fallbacks and to inspect each event's callback provenance.
 
 ## Missing events diagnostic
 

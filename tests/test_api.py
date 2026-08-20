@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from fl_activity_recorder.api import create_app
 from fl_activity_recorder.config import Settings
+from fl_activity_recorder.observer_contract import OBSERVER_BUILD, OBSERVER_SCHEMA, OBSERVER_VERSION
 from fl_activity_recorder.protocol import DecodedMessage, MessageKind
 
 
@@ -19,7 +20,14 @@ def test_session_api_and_dashboard(tmp_path: object) -> None:
             DecodedMessage(
                 MessageKind.HELLO,
                 1,
-                {"api_version": 42, "fl_version": "26.1.3", "project_title": "API Test"},
+                {
+                    "api_version": 42,
+                    "fl_version": "26.1.3",
+                    "project_title": "API Test",
+                    "observer_version": OBSERVER_VERSION,
+                    "observer_schema": OBSERVER_SCHEMA,
+                    "observer_build": OBSERVER_BUILD,
+                },
             )
         )
         recorder.ingest(DecodedMessage(MessageKind.HEARTBEAT, 2, {}))
@@ -49,9 +57,14 @@ def test_session_api_and_dashboard(tmp_path: object) -> None:
         )
         assert filtered.status_code == 200
         assert len(filtered.json()) == 1
+        assert client.get(f"/api/sessions/{session['id']}/categories").json() == [
+            "mixer",
+            "project",
+        ]
         export = client.get(f"/api/sessions/{session['id']}/export")
         assert export.status_code == 200
         assert "Mixer track 1 changed" in export.text
+        assert OBSERVER_BUILD in export.text
         assert client.delete(f"/api/sessions/{session['id']}").status_code == 409
         assert client.post(f"/api/sessions/{session['id']}/stop").status_code == 200
         assert client.delete(f"/api/sessions/{session['id']}").status_code == 204
