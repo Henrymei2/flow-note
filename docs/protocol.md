@@ -23,5 +23,6 @@ The observer emits a heartbeat once per second. Five seconds without a heartbeat
 
 `HELLO` includes the FL/API versions plus `observer_version`, `observer_schema`,
 `observer_build`, and the supported capability names. Protocol framing remains version 1;
-observer schema 2 describes the repaired event catalog and trigger-provenance payloads. The
+observer schema 3 describes the unified-timeline event catalog, trigger provenance, and an
+`observed_monotonic_seconds` timestamp captured when the source callback first detects an event. The
 companion refuses to start a session unless the observer schema and build match.

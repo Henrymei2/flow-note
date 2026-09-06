@@ -37,6 +37,7 @@ def default_data_directory(
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_path: Path
+    data_directory: Path | None = None
     midi_event_port: str = "ActivityRecorder Events"
     host: str = "127.0.0.1"
     port: int = 8765
@@ -52,6 +53,9 @@ class Settings:
         )
         return cls(
             database_path=database,
+            data_directory=Path(
+                os.environ.get("FL_ACTIVITY_DATA_DIRECTORY", database.parent / "sessions")
+            ),
             midi_event_port=os.environ.get("FL_ACTIVITY_MIDI_PORT", "ActivityRecorder Events"),
             host="127.0.0.1",
             port=int(os.environ.get("FL_ACTIVITY_PORT", "8765")),

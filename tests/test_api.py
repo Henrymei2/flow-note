@@ -75,3 +75,68 @@ def test_disconnected_start_is_rejected(tmp_path: object) -> None:
     with TestClient(app) as client:
         response = client.post("/api/sessions")
         assert response.status_code == 409
+
+
+def test_clock_capture_timeline_and_range_video_api(tmp_path: object) -> None:
+    settings = Settings(
+        database_path=tmp_path / "test.db",  # type: ignore[operator]
+        data_directory=tmp_path / "sessions",  # type: ignore[operator]
+        enable_midi=False,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        recorder = app.state.recorder
+        recorder.ingest(
+            DecodedMessage(
+                MessageKind.HELLO,
+                1,
+                {
+                    "api_version": 45,
+                    "observer_version": OBSERVER_VERSION,
+                    "observer_schema": OBSERVER_SCHEMA,
+                    "observer_build": OBSERVER_BUILD,
+                },
+            )
+        )
+        clock = client.get("/api/clock").json()
+        assert clock["mode"] in {"lsl", "monotonic_fallback"}
+        session = client.post("/api/sessions").json()
+        start = client.post(
+            f"/api/sessions/{session['id']}/capture/start",
+            json={
+                "started_lsl": clock["lsl_seconds"],
+                "mime_type": "video/webm",
+                "clock_sync": {"rtt_ms": 1.0},
+                "metadata": {"width": 1280, "height": 720, "has_audio": False},
+            },
+        )
+        assert start.status_code == 200
+        assert (
+            client.post(
+                f"/api/sessions/{session['id']}/capture/chunks/1", content=b"bad"
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                f"/api/sessions/{session['id']}/capture/chunks/0", content=b"webm-data"
+            ).status_code
+            == 200
+        )
+        completed = client.post(
+            f"/api/sessions/{session['id']}/capture/complete",
+            json={
+                "ended_lsl": clock["lsl_seconds"] + 1,
+                "duration_seconds": 1,
+            },
+        )
+        assert completed.json()["status"] == "ready"
+        assert client.post(f"/api/sessions/{session['id']}/stop").status_code == 200
+        timeline = client.get(
+            f"/api/sessions/{session['id']}/timeline", params={"start": 0, "end": 2}
+        )
+        assert timeline.status_code == 200
+        assert timeline.json()["events"][0]["timeline_seconds"] == 0
+        video = client.get(f"/api/sessions/{session['id']}/video", headers={"Range": "bytes=0-3"})
+        assert video.status_code == 206
+        assert video.content == b"webm"

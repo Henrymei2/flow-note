@@ -12,12 +12,19 @@ from .database import Database
 from .models import ActivityEvent
 from .observer_contract import OBSERVER_BUILD, OBSERVER_SCHEMA, OBSERVER_VERSION
 from .protocol import DecodedMessage, MessageKind
+from .timebase import MarkerOutlet, TimelineClock
 
 MINIMUM_API_VERSION = 42
 
 
 class Recorder:
-    def __init__(self, database: Database, *, heartbeat_timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        heartbeat_timeout: float = 5.0,
+        clock: TimelineClock | None = None,
+    ) -> None:
         self.database = database
         self.heartbeat_timeout = heartbeat_timeout
         self.active_session_id: str | None = None
@@ -28,6 +35,8 @@ class Recorder:
         self._lock = threading.RLock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self.clock = clock or TimelineClock()
+        self.markers = MarkerOutlet(self.clock, on_marker=self._store_marker)
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -70,6 +79,9 @@ class Recorder:
             "heartbeat_age_seconds": age,
             "active_session_id": self.active_session_id,
             "observer": dict(self.hello),
+            "clock_mode": self.clock.mode,
+            "lsl_available": self.clock.available,
+            "lsl_marker_available": self.markers.available,
         }
 
     def start_session(self) -> dict[str, Any]:
@@ -88,6 +100,10 @@ class Recorder:
                     "The FL Studio observer is out of date. Reinstall it and reload the "
                     f"script (required build: {OBSERVER_BUILD})."
                 )
+            reading = self.clock.reading()
+            clock_mode = self.clock.mode
+            if self.clock.available and not self.markers.available:
+                clock_mode = "lsl_no_marker_outlet"
             session = self.database.create_session(
                 project_title=_string_or_none(
                     self.latest_snapshot.get("project_title") or self.hello.get("project_title")
@@ -97,8 +113,29 @@ class Recorder:
                 recorder_version=__version__,
                 observer_version=_string_or_none(self.hello.get("observer_version")),
                 observer_build=_string_or_none(self.hello.get("observer_build")),
+                timeline_zero_lsl=reading.lsl_seconds,
+                timeline_zero_monotonic=reading.monotonic_seconds,
+                timeline_zero_utc=reading.utc_seconds,
+                monotonic_lsl_offset=reading.lsl_seconds - reading.monotonic_seconds,
+                clock_model_version="lsl-local-clock-offset-v1",
+                clock_mode=clock_mode,
             )
             self.active_session_id = str(session["id"])
+            self.database.add_clock_sample(
+                session_id=self.active_session_id,
+                source="session_start",
+                lsl_seconds=reading.lsl_seconds,
+                monotonic_seconds=reading.monotonic_seconds,
+                utc_seconds=reading.utc_seconds,
+            )
+            self.markers.start(self.active_session_id)
+            if not self.markers.available:
+                self.database.add_diagnostic(
+                    session_id=self.active_session_id,
+                    level="warning",
+                    code="lsl_marker_unavailable",
+                    message="LSL markers are unavailable; EmotiBit import will require repair",
+                )
             initial = ActivityEvent(
                 category="project",
                 action="initial_snapshot",
@@ -111,8 +148,13 @@ class Recorder:
                 self.active_session_id,
                 self.last_sequence or 0,
                 _utc_now(),
-                time.monotonic(),
+                reading.monotonic_seconds,
                 initial,
+                observed_monotonic_seconds=reading.monotonic_seconds,
+                received_monotonic_seconds=reading.monotonic_seconds,
+                timeline_seconds=0.0,
+                transport_delay_ms=0.0,
+                time_confidence="source",
             )
             self._publish({"type": "session_started", "session": session, "event": stored})
             return session
@@ -121,8 +163,11 @@ class Recorder:
         with self._lock:
             if self.active_session_id != session_id:
                 raise KeyError(session_id)
+            self.markers.stop()
             result = self.database.finish_session(
-                session_id, "interrupted" if interrupted else "completed"
+                session_id,
+                "interrupted" if interrupted else "completed",
+                timeline_end_lsl=self.clock.now(),
             )
             self.active_session_id = None
         if result is None:
@@ -206,8 +251,28 @@ class Recorder:
                     "entity_type": "project",
                     "payload": payload,
                 }
+            observed = _float_or_none(payload.pop("observed_monotonic_seconds", None))
+            source_lsl = self.clock.monotonic_to_lsl(observed) if observed is not None else None
+            session = self.database.get_session(session_id)
+            zero = _float_or_none(session.get("timeline_zero_lsl"))
+            received_lsl = self.clock.monotonic_to_lsl(now)
             event = ActivityEvent.from_payload(payload)
-            stored = self.database.add_event(session_id, message.sequence, _utc_now(), now, event)
+            stored = self.database.add_event(
+                session_id,
+                message.sequence,
+                _utc_now(),
+                now,
+                event,
+                observed_monotonic_seconds=observed,
+                received_monotonic_seconds=now,
+                timeline_seconds=(
+                    (source_lsl if source_lsl is not None else received_lsl) - zero
+                    if zero is not None
+                    else None
+                ),
+                transport_delay_ms=(now - observed) * 1000 if observed is not None else None,
+                time_confidence="source" if observed is not None else "received",
+            )
             self._publish({"type": "event", "event": stored})
 
     def check_heartbeat(self) -> None:
@@ -242,6 +307,11 @@ class Recorder:
 
         self._loop.call_soon_threadsafe(deliver)
 
+    def _store_marker(self, marker: dict[str, Any]) -> None:
+        session_id = self.active_session_id
+        if session_id is not None:
+            self.database.add_sync_marker(session_id, marker)
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
@@ -253,3 +323,7 @@ def _string_or_none(value: Any) -> str | None:
 
 def _int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) else None
+
+
+def _float_or_none(value: Any) -> float | None:
+    return float(value) if isinstance(value, int | float) else None

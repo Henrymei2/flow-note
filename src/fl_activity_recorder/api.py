@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import tempfile
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import __version__
+from .assets import CaptureManager
 from .config import Settings
 from .database import Database
+from .emotibit import EmotiBitImporter
 from .midi_receiver import MidiReceiver
 from .recorder import Recorder
 
@@ -25,6 +30,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or Settings.from_environment()
     database = Database(resolved.database_path)
     recorder = Recorder(database)
+    data_directory = resolved.data_directory or resolved.database_path.parent / "sessions"
+    captures = CaptureManager(database, data_directory, recorder.clock)
+    importer = EmotiBitImporter(database, captures)
+    import_tasks: set[asyncio.Task[None]] = set()
     receiver = (
         MidiReceiver(recorder, database, resolved.midi_event_port) if resolved.enable_midi else None
     )
@@ -42,12 +51,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             monitor.cancel()
             if receiver is not None:
                 receiver.stop()
+            if recorder.active_session_id is not None:
+                recorder.stop_session(recorder.active_session_id, interrupted=True)
+            if import_tasks:
+                await asyncio.gather(*import_tasks, return_exceptions=True)
             database.close()
 
     app = FastAPI(title="FL Studio Activity Recorder", version=__version__, lifespan=lifespan)
     app.state.database = database
     app.state.recorder = recorder
     app.state.settings = resolved
+    app.state.captures = captures
+    app.state.importer = importer
+    app.state.import_tasks = import_tasks
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
@@ -62,6 +78,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         return recorder.health()
+
+    @app.get("/api/clock")
+    async def clock() -> dict[str, Any]:
+        """Return adjacent server clocks for browser RTT calibration."""
+        reading = recorder.clock.reading()
+        return {
+            "lsl_seconds": reading.lsl_seconds,
+            "monotonic_seconds": reading.monotonic_seconds,
+            "utc_seconds": reading.utc_seconds,
+            "mode": recorder.clock.mode,
+        }
 
     @app.post("/api/sessions", status_code=201)
     async def start_session() -> dict[str, Any]:
@@ -80,6 +107,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/sessions")
     async def list_sessions() -> list[dict[str, Any]]:
         return database.list_sessions()
+
+    @app.get("/api/sessions/{session_id}")
+    async def get_session(session_id: str) -> dict[str, Any]:
+        """Return one session with its assets and signal catalog."""
+        try:
+            session = database.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        session["assets"] = database.list_assets(session_id)
+        session["signals"] = database.list_signal_streams(session_id)
+        return session
 
     @app.get("/api/sessions/{session_id}/events")
     async def list_events(
@@ -111,6 +149,184 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Session not found") from exc
         return database.list_event_categories(session_id)
 
+    @app.get("/api/sessions/{session_id}/timeline")
+    async def timeline(
+        session_id: str,
+        start: float = 0,
+        end: float = Query(default=600, gt=0),
+        pixels: int = Query(default=1000, ge=50, le=5000),
+        tracks: str = "",
+    ) -> dict[str, Any]:
+        """Return synchronized event and decimated signal windows."""
+        try:
+            session = database.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        selected = [item for item in tracks.split(",") if item]
+        signals = []
+        for tag in selected:
+            try:
+                signals.append(importer.query(session_id, tag, start, end, pixels))
+            except KeyError:
+                continue
+        return {
+            "session_id": session_id,
+            "start": start,
+            "end": end,
+            "events": database.list_timeline_events(session_id, start, end),
+            "signals": signals,
+            "duration_seconds": _session_duration(session),
+        }
+
+    @app.post("/api/sessions/{session_id}/capture/start")
+    async def start_capture(session_id: str, request: Request) -> dict[str, Any]:
+        """Start an ordered browser capture upload."""
+        try:
+            session = database.get_session(session_id)
+            if session["status"] != "recording":
+                raise HTTPException(status_code=409, detail="Session is not recording")
+            payload = await request.json()
+            started_lsl = float(payload["started_lsl"])
+            if abs(recorder.clock.now() - started_lsl) > 10:
+                raise ValueError("Browser clock estimate is outside the allowed range")
+            metadata = dict(payload.get("metadata") or {})
+            sync = dict(payload.get("clock_sync") or {})
+            database.add_clock_sample(
+                session_id=session_id,
+                source="browser_capture",
+                lsl_seconds=started_lsl,
+                rtt_ms=_optional_float(sync.get("rtt_ms")),
+                metadata=sync,
+            )
+            if not metadata.get("has_audio", False):
+                database.add_diagnostic(
+                    session_id=session_id,
+                    level="warning",
+                    code="audio_unavailable",
+                    message="Chrome did not provide an audio track; video is silent",
+                )
+            return captures.start(
+                session_id,
+                mime_type=str(payload.get("mime_type") or "video/webm"),
+                started_lsl=started_lsl,
+                metadata=metadata,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/sessions/{session_id}/capture/chunks/{sequence}")
+    async def append_capture_chunk(
+        session_id: str, sequence: int, request: Request
+    ) -> dict[str, int]:
+        """Append the next numbered browser media chunk."""
+        try:
+            data = await request.body()
+            return {"bytes": captures.append(session_id, sequence, data)}
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/sessions/{session_id}/capture/complete")
+    async def complete_capture(session_id: str, request: Request) -> dict[str, Any]:
+        """Finalize a complete browser video asset."""
+        payload = await request.json()
+        try:
+            return captures.complete(
+                session_id,
+                ended_lsl=float(payload["ended_lsl"]),
+                duration_seconds=float(payload.get("duration_seconds") or 0),
+                metadata=dict(payload.get("metadata") or {}),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/sessions/{session_id}/capture/abort")
+    async def abort_capture(session_id: str, request: Request) -> dict[str, Any]:
+        """Retain and mark an interrupted browser video asset."""
+        payload = await request.json()
+        return captures.abort(session_id, str(payload.get("reason") or "browser capture aborted"))
+
+    @app.get("/api/sessions/{session_id}/video")
+    async def video(session_id: str) -> FileResponse:
+        """Serve a completed video with framework-provided Range support."""
+        try:
+            path = captures.video_path(session_id)
+            asset = database.get_asset(session_id, "video")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Video is not ready") from exc
+        return FileResponse(path, media_type=asset["mime_type"] or "video/webm")
+
+    @app.post("/api/sessions/{session_id}/emotibit/import", status_code=202)
+    async def import_emotibit(
+        session_id: str,
+        files: Annotated[list[UploadFile], File()],
+        replace: bool = False,
+    ) -> dict[str, str]:
+        """Stage a complete DataParser bundle and launch its import task."""
+        try:
+            session = database.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        if session["status"] == "recording":
+            raise HTTPException(status_code=409, detail="Stop the session before importing")
+        if database.has_running_import(session_id):
+            raise HTTPException(status_code=409, detail="An EmotiBit import is already running")
+        upload_root = Path(tempfile.mkdtemp(prefix="emotibit-upload-", dir=data_directory))
+        saved = []
+        names = [Path(upload.filename or "upload").name for upload in files]
+        if len(names) != len(set(names)):
+            shutil.rmtree(upload_root, ignore_errors=True)
+            raise HTTPException(status_code=422, detail="Uploaded filenames must be unique")
+        try:
+            for upload, name in zip(files, names, strict=True):
+                destination = upload_root / name
+                with destination.open("wb") as handle:
+                    while chunk := await upload.read(1024 * 1024):
+                        handle.write(chunk)
+                saved.append(destination)
+        except Exception:
+            shutil.rmtree(upload_root, ignore_errors=True)
+            raise
+        job_id = str(uuid.uuid4())
+        database.create_import_job(job_id, session_id, replace_existing=replace)
+
+        async def run_import() -> None:
+            """Execute a staged import and persist its terminal status."""
+            try:
+                result = await asyncio.to_thread(
+                    importer.import_files, session_id, saved, replace=replace
+                )
+                database.finish_import_job(job_id, "completed", result=result)
+                recorder._publish({"type": "emotibit_imported", "session_id": session_id})
+            except Exception as exc:
+                database.finish_import_job(job_id, "failed", error=str(exc))
+                database.add_diagnostic(
+                    session_id=session_id,
+                    level="error",
+                    code="emotibit_import_failed",
+                    message=str(exc),
+                )
+            finally:
+                shutil.rmtree(upload_root, ignore_errors=True)
+
+        task = asyncio.create_task(run_import())
+        import_tasks.add(task)
+        task.add_done_callback(import_tasks.discard)
+        return {"job_id": job_id, "status": "running"}
+
+    @app.get("/api/import-jobs/{job_id}")
+    async def import_job(job_id: str) -> dict[str, Any]:
+        """Return the persisted state of an EmotiBit import task."""
+        try:
+            return database.get_import_job(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Import job not found") from exc
+
     @app.get("/api/sessions/{session_id}/export")
     async def export_session(session_id: str) -> StreamingResponse:
         try:
@@ -120,6 +336,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         def lines() -> Any:
             yield json.dumps({"type": "session", "data": session}, ensure_ascii=False) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "type": "assets",
+                        "data": {
+                            "assets": database.list_assets(session_id),
+                            "signals": database.list_signal_streams(session_id),
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
             offset = 0
             while True:
                 events = database.list_events(session_id, limit=1000, offset=offset)
@@ -136,6 +365,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def delete_session(session_id: str) -> Response:
         if recorder.active_session_id == session_id:
             raise HTTPException(status_code=409, detail="Stop the recording before deleting it")
+        try:
+            database.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        if database.has_running_import(session_id):
+            raise HTTPException(status_code=409, detail="Wait for the EmotiBit import to finish")
+        captures.delete_session_files(session_id)
         if not database.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         return Response(status_code=204)
@@ -159,6 +395,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     return app
+
+
+def _session_duration(session: dict[str, Any]) -> float:
+    zero = _optional_float(session.get("timeline_zero_lsl"))
+    end = _optional_float(session.get("timeline_end_lsl"))
+    return max(0.0, end - zero) if zero is not None and end is not None else 0.0
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if isinstance(value, int | float) else None
 
 
 async def _heartbeat_monitor(recorder: Recorder) -> None:

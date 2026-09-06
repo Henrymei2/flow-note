@@ -19,6 +19,7 @@ def main() -> None:
     if args.port is not None:
         settings = Settings(
             database_path=settings.database_path,
+            data_directory=settings.data_directory,
             midi_event_port=settings.midi_event_port,
             host="127.0.0.1",
             port=args.port,

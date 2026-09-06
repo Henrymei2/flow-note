@@ -8,7 +8,7 @@ and Windows with loopMIDI before publishing a cross-platform release.
 - [ ] Observer appears as **Activity Recorder (user)** and reports API 42+
 - [ ] Platform setup check finds both virtual MIDI ports
 - [ ] Companion connects within five seconds
-- [ ] Script Output, dashboard health, and export all report `event-capture-v2`
+- [ ] Script Output, dashboard health, and export all report `unified-timeline-v1`
 - [ ] Physical MIDI controllers and keyboard input still behave normally
 - [ ] Observer never consumes or modifies incoming user MIDI
 - [ ] Start/stop consent rules are respected

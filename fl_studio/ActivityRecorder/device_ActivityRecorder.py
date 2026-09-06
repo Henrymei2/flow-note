@@ -16,9 +16,9 @@ import ui
 
 PROTOCOL_VERSION = 1
 MINIMUM_API_VERSION = 42
-OBSERVER_VERSION = "0.2.0"
-OBSERVER_SCHEMA = 2
-OBSERVER_BUILD = "event-capture-v2"
+OBSERVER_VERSION = "0.3.0"
+OBSERVER_SCHEMA = 3
+OBSERVER_BUILD = "unified-timeline-v1"
 OBSERVER_CAPABILITIES = (
     "transport_state",
     "channel_selection",
@@ -95,7 +95,16 @@ def _flag(name, default):
     return value if isinstance(value, int) else default
 
 
-def _event(category, action, summary, confidence, entity_type=None, entity_key=None, payload=None):
+def _event(
+    category,
+    action,
+    summary,
+    confidence,
+    entity_type=None,
+    entity_key=None,
+    payload=None,
+    observed_monotonic_seconds=None,
+):
     return {
         "category": category,
         "action": action,
@@ -104,6 +113,9 @@ def _event(category, action, summary, confidence, entity_type=None, entity_key=N
         "entity_type": entity_type,
         "entity_key": entity_key,
         "payload": payload or {},
+        "observed_monotonic_seconds": (
+            time.monotonic() if observed_monotonic_seconds is None else observed_monotonic_seconds
+        ),
     }
 
 
@@ -704,6 +716,7 @@ class ActivityRecorder:
                     _flag("HW_ChannelEvent", 65536),
                     False,
                 ),
+                observed_monotonic_seconds=queued_at,
             )
         )
         self.dirty_steps = True
@@ -747,6 +760,7 @@ class ActivityRecorder:
                         _flag("HW_Dirty_Mixer_Controls", 4),
                         False,
                     ),
+                    observed_monotonic_seconds=queued_at,
                 )
             )
             return True
@@ -771,6 +785,7 @@ class ActivityRecorder:
                             _flag("HW_Dirty_Mixer_Controls", 4),
                             False,
                         ),
+                        observed_monotonic_seconds=queued_at,
                     )
                 )
         controls = {
@@ -791,6 +806,7 @@ class ActivityRecorder:
                         _flag("HW_Dirty_Mixer_Controls", 4),
                         False,
                     ),
+                    observed_monotonic_seconds=queued_at,
                 )
             )
         return True
@@ -866,6 +882,7 @@ class ActivityRecorder:
             "generation": self.plugin_generation,
             "report": report,
             "trigger": (callback, flags, fallback),
+            "observed_at": self.plugin_dirty_at or time.monotonic(),
         }
 
     def poll_plugin(self):
@@ -922,6 +939,7 @@ class ActivityRecorder:
                         flags,
                         fallback,
                     ),
+                    observed_monotonic_seconds=scan["observed_at"],
                 )
             )
         elif previous is not None and previous != current:
@@ -950,6 +968,7 @@ class ActivityRecorder:
                         flags,
                         fallback,
                     ),
+                    observed_monotonic_seconds=scan["observed_at"],
                 )
             )
         return True
@@ -964,7 +983,13 @@ class ActivityRecorder:
 
     def queue_undo(self, flags):
         if self.pending_undo is None:
-            self.pending_undo = {"sample": None, "stable": 0, "attempts": 0, "flags": flags}
+            self.pending_undo = {
+                "sample": None,
+                "stable": 0,
+                "attempts": 0,
+                "flags": flags,
+                "observed_at": time.monotonic(),
+            }
         else:
             self.pending_undo["flags"] |= flags
             self.pending_undo["stable"] = 0
@@ -983,10 +1008,10 @@ class ActivityRecorder:
         if pending["stable"] < 1 and pending["attempts"] < 4:
             return False
         self.pending_undo = None
-        self.capture_undo_change(current, pending["flags"])
+        self.capture_undo_change(current, pending["flags"], pending["observed_at"])
         return True
 
-    def capture_undo_change(self, current, flags):
+    def capture_undo_change(self, current, flags, observed_at):
         previous = self.undo_state
         self.undo_state = current
         if previous is None:
@@ -1010,6 +1035,7 @@ class ActivityRecorder:
                         flags,
                         False,
                     ),
+                    observed_monotonic_seconds=observed_at,
                 )
             )
             return
@@ -1049,6 +1075,7 @@ class ActivityRecorder:
                     flags,
                     False,
                 ),
+                observed_monotonic_seconds=observed_at,
             )
         )
 

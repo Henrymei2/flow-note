@@ -48,6 +48,9 @@ def test_persists_only_during_active_session(tmp_path: object) -> None:
         )
     )
     session = recorder.start_session()
+    assert session["timeline_zero_utc"] is not None
+    assert session["monotonic_lsl_offset"] is not None
+    assert session["clock_model_version"] == "lsl-local-clock-offset-v1"
     recorder.ingest(
         message(
             MessageKind.EVENT,
@@ -201,4 +204,31 @@ def test_reload_interrupts_active_session_instead_of_mixing_observer_epochs(
         "SELECT code FROM diagnostics ORDER BY rowid DESC LIMIT 1"
     ).fetchone()
     assert diagnostic["code"] == "observer_restarted"
+    database.close()
+
+
+def test_source_observation_time_drives_relative_timeline(tmp_path: object) -> None:
+    database = Database(tmp_path / "activity.db")  # type: ignore[operator]
+    recorder = Recorder(database)
+    connect(recorder)
+    session = recorder.start_session()
+    observed = time.monotonic() - 0.25
+    recorder.ingest(
+        message(
+            MessageKind.EVENT,
+            3,
+            {
+                "category": "mixer",
+                "action": "track_changed",
+                "summary": "Delayed stable read",
+                "confidence": "state_diff",
+                "observed_monotonic_seconds": observed,
+            },
+        )
+    )
+    event = database.list_events(str(session["id"]))[0]
+    assert event["time_confidence"] == "source"
+    assert event["transport_delay_ms"] >= 200
+    assert event["observed_monotonic_seconds"] == observed
+    recorder.stop_session(str(session["id"]))
     database.close()

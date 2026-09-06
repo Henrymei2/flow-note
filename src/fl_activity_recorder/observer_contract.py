@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-OBSERVER_VERSION = "0.2.0"
-OBSERVER_SCHEMA = 2
-OBSERVER_BUILD = "event-capture-v2"
+OBSERVER_VERSION = "0.3.0"
+OBSERVER_SCHEMA = 3
+OBSERVER_BUILD = "unified-timeline-v1"
 OBSERVER_CAPABILITIES = (
     "transport_state",
     "channel_selection",
@@ -13,4 +13,3 @@ OBSERVER_CAPABILITIES = (
     "undo_direction",
     "trigger_provenance",
 )
-

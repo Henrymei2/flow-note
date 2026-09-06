@@ -8,7 +8,9 @@ The recorder has two parts:
 1. A transparent FL Studio MIDI controller script observes documented host callbacks and state.
 2. A local companion receives those events over virtual MIDI, stores active sessions in SQLite, and serves a dashboard at `http://127.0.0.1:8765`.
 
-No cloud service, telemetry, accessibility hooks, screenshots, keylogging, audio capture, or physical-controller MIDI routing is included.
+No cloud service, telemetry, accessibility hooks, keylogging, or physical-controller MIDI
+routing is included. When explicitly authorized in Chrome, a session can also contain a local
+FL Studio window recording and the audio track Chrome supplies.
 
 ## What it can record
 
@@ -36,6 +38,8 @@ state. See [feasibility.md](docs/feasibility.md).
 - macOS supported by FL Studio, or Windows 10/11
 - FL Studio 26.1.3+ with MIDI scripting API 42+
 - Python 3.12
+- Latest desktop Chrome for optional 720p/30fps window recording
+- EmotiBit Oscilloscope and DataParser for physiological-data sessions
 - Virtual MIDI: the built-in IAC Driver on macOS, or
   [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) on Windows
 
@@ -70,7 +74,7 @@ In FL Studio, open **Options → MIDI settings**:
    the same FL port number.
 5. Leave the Events bus disabled under Input and the Control bus disabled under Output.
 6. Open **View → Script output** and confirm that Activity Recorder initializes.
-   It must print `schema=2 build=event-capture-v2`.
+   It must print `schema=3 build=unified-timeline-v1`.
 
 Start the companion:
 
@@ -102,7 +106,7 @@ In FL Studio, open **Options → MIDI settings**:
 3. Assign it an unused FL port number, such as `42`.
 4. Enable `ActivityRecorder Events` under Output and assign the same FL port number.
 5. Open **View → Script output** and confirm that Activity Recorder initializes without errors.
-   It must print `schema=2 build=event-capture-v2`.
+   It must print `schema=3 build=unified-timeline-v1`.
 
 Start the companion:
 
@@ -111,6 +115,14 @@ Start the companion:
 ```
 
 The dashboard opens locally. Recording begins only after you press **Start recording**.
+
+## Unified EmotiBit timeline and screen recording
+
+The dashboard can align FL Studio events, a user-authorized Chrome window recording, and
+official EmotiBit DataParser output on one LSL-backed timeline. Complete the one-time LSL and
+DataParser configuration before collecting data, then start EmotiBit recording before starting
+the dashboard session. See [unified-timeline.md](docs/unified-timeline.md) for exact setup,
+collection, import, quality labels, and platform validation steps.
 
 The companion blocks recording when FL Studio is still running an older observer. Run the
 installer again, then reload Activity Recorder from **View → Script output** or restart FL Studio.
@@ -158,3 +170,4 @@ and parameter labels are stored; project paths are not collected. See
 - [Privacy](docs/privacy.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Real FL Studio validation](docs/real-fl-validation.md)
+- [Unified timeline setup and validation](docs/unified-timeline.md)

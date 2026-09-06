@@ -26,6 +26,7 @@
           <span class="record-icon"></span><span id="record-label">Start recording</span>
         </button>
         <p class="muted" id="record-help">Connect the FL Studio observer to begin.</p>
+        <p class="source-hint">Start EmotiBit recording in Oscilloscope before this session.</p>
       </div>
 
       <div class="section-heading">
@@ -44,9 +45,24 @@
           <p class="muted" id="session-time">Record a session to build a searchable timeline.</p>
         </div>
         <div class="summary-actions">
+          <input id="emotibit-files" type="file" accept=".csv,.json" multiple hidden>
+          <button class="button secondary" id="import-button" disabled>Import EmotiBit</button>
           <a class="button secondary disabled" id="export-button" href="#">Export JSONL</a>
           <button class="button danger" id="delete-button" disabled>Delete</button>
         </div>
+      </div>
+
+      <div class="review panel" id="review-panel" hidden>
+        <div class="source-status" id="source-status"></div>
+        <video id="session-video" controls preload="metadata" hidden></video>
+        <div id="event-ruler" class="event-ruler" aria-label="FL Studio event markers"></div>
+        <div class="playhead-controls">
+          <span id="playhead-label">00:00.000</span>
+          <input id="playhead" type="range" min="0" max="1" step="0.001" value="0">
+          <select id="zoom"><option value="1">Full session</option><option value="4">4× zoom</option><option value="16">16× zoom</option></select>
+        </div>
+        <div id="track-picker" class="track-picker"></div>
+        <div id="signal-tracks" class="signal-tracks"></div>
       </div>
 
       <div class="filters panel">
@@ -83,6 +99,7 @@
   </main>
 
   <div class="toast" id="toast" role="status"></div>
+  <div class="modal" id="capture-modal" hidden><div class="modal-card"><h2>Select FL Studio</h2><p>Chrome will ask which window to share. Select the FL Studio window. Audio is used when Chrome provides it.</p></div></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

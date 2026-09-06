@@ -13,7 +13,7 @@
 
 Run the platform installer again and verify its source/destination checksum succeeds. In FL
 Studio, reload Activity Recorder from **View → Script output** or restart FL Studio. Script Output
-and dashboard health must both show `schema=2 build=event-capture-v2`. Recording is intentionally
+and dashboard health must both show `schema=3 build=unified-timeline-v1`. Recording is intentionally
 blocked while an older observer is active.
 
 The installer must also print `companion=0.2.1`. Stop any dashboard process that was running
