@@ -127,6 +127,21 @@ class Database:
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     UNIQUE(session_id, type_tag)
                 );
+                CREATE TABLE IF NOT EXISTS signal_chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    type_tag TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    start_seconds REAL NOT NULL,
+                    end_seconds REAL NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    min_value REAL NOT NULL,
+                    max_value REAL NOT NULL,
+                    relative_path TEXT NOT NULL,
+                    UNIQUE(session_id, type_tag, sequence)
+                );
+                CREATE INDEX IF NOT EXISTS signal_chunks_window
+                    ON signal_chunks(session_id, type_tag, start_seconds, end_seconds);
                 CREATE TABLE IF NOT EXISTS sync_markers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -196,6 +211,17 @@ class Database:
             connection.execute(
                 "UPDATE sessions SET status='interrupted', ended_at=? WHERE status='recording'",
                 (utc_now(),),
+            )
+            connection.execute(
+                """UPDATE recording_assets SET status='interrupted'
+                   WHERE kind='emotibit' AND status='recording'"""
+            )
+            connection.execute(
+                """UPDATE sessions SET emotibit_status='interrupted', sync_quality='degraded'
+                   WHERE id IN (
+                       SELECT session_id FROM recording_assets
+                       WHERE kind='emotibit' AND status='interrupted'
+                   ) AND status='interrupted'"""
             )
             connection.execute(
                 """UPDATE emotibit_imports SET status='failed', completed_at=?,
@@ -617,7 +643,7 @@ class Database:
         return self.get_asset(session_id, "emotibit")
 
     def list_signal_streams(self, session_id: str) -> list[dict[str, Any]]:
-        """Return metadata for all imported signals."""
+        """Return metadata for all physiological signal tracks."""
         with self._lock:
             rows = self._connection.execute(
                 "SELECT * FROM signal_streams WHERE session_id=? ORDER BY group_name, type_tag",
@@ -629,6 +655,80 @@ class Database:
             item["metadata"] = json.loads(item.pop("metadata_json"))
             results.append(item)
         return results
+
+    def ensure_live_signal_stream(self, session_id: str, stream: dict[str, Any]) -> None:
+        """Create metadata for a live LSL track before its first chunk is committed."""
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO signal_streams
+                   (session_id, type_tag, display_name, group_name, unit, nominal_rate,
+                    sample_count, start_seconds, end_seconds, relative_path, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)
+                   ON CONFLICT(session_id, type_tag) DO NOTHING""",
+                (
+                    session_id,
+                    stream["type_tag"],
+                    stream["display_name"],
+                    stream["group_name"],
+                    stream.get("unit"),
+                    stream.get("nominal_rate"),
+                    stream["relative_path"],
+                    json.dumps(stream.get("metadata", {}), separators=(",", ":")),
+                ),
+            )
+
+    def add_signal_chunk(self, session_id: str, chunk: dict[str, Any]) -> None:
+        """Publish one immutable signal chunk and update its track aggregate atomically."""
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO signal_chunks
+                   (session_id, type_tag, sequence, start_seconds, end_seconds,
+                    sample_count, min_value, max_value, relative_path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    chunk["type_tag"],
+                    chunk["sequence"],
+                    chunk["start_seconds"],
+                    chunk["end_seconds"],
+                    chunk["sample_count"],
+                    chunk["min_value"],
+                    chunk["max_value"],
+                    chunk["relative_path"],
+                ),
+            )
+            connection.execute(
+                """UPDATE signal_streams SET
+                       sample_count=sample_count + ?,
+                       start_seconds=CASE WHEN sample_count=0 THEN ?
+                                          ELSE MIN(start_seconds, ?) END,
+                       end_seconds=CASE WHEN sample_count=0 THEN ?
+                                        ELSE MAX(end_seconds, ?) END
+                   WHERE session_id=? AND type_tag=?""",
+                (
+                    chunk["sample_count"],
+                    chunk["start_seconds"],
+                    chunk["start_seconds"],
+                    chunk["end_seconds"],
+                    chunk["end_seconds"],
+                    session_id,
+                    chunk["type_tag"],
+                ),
+            )
+
+    def list_signal_chunks(
+        self, session_id: str, type_tag: str, start: float, end: float
+    ) -> list[dict[str, Any]]:
+        """Return immutable chunks intersecting a relative timeline window."""
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT * FROM signal_chunks
+                   WHERE session_id=? AND type_tag=?
+                     AND end_seconds>=? AND start_seconds<=?
+                   ORDER BY sequence""",
+                (session_id, type_tag, start, end),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def set_sync_quality(self, session_id: str, quality: str) -> None:
         """Set the current evidence-backed synchronization quality label."""

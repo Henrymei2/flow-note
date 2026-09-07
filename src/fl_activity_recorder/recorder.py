@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -12,7 +13,7 @@ from .database import Database
 from .models import ActivityEvent
 from .observer_contract import OBSERVER_BUILD, OBSERVER_SCHEMA, OBSERVER_VERSION
 from .protocol import DecodedMessage, MessageKind
-from .timebase import MarkerOutlet, TimelineClock
+from .timebase import TimelineClock
 
 MINIMUM_API_VERSION = 42
 
@@ -24,6 +25,7 @@ class Recorder:
         *,
         heartbeat_timeout: float = 5.0,
         clock: TimelineClock | None = None,
+        session_stop_hook: Callable[[str, float, bool], None] | None = None,
     ) -> None:
         self.database = database
         self.heartbeat_timeout = heartbeat_timeout
@@ -36,7 +38,7 @@ class Recorder:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self.clock = clock or TimelineClock()
-        self.markers = MarkerOutlet(self.clock, on_marker=self._store_marker)
+        self.session_stop_hook = session_stop_hook
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -81,8 +83,15 @@ class Recorder:
             "observer": dict(self.hello),
             "clock_mode": self.clock.mode,
             "lsl_available": self.clock.available,
-            "lsl_marker_available": self.markers.available,
         }
+
+    def set_session_stop_hook(self, hook: Callable[[str, float, bool], None]) -> None:
+        """Register the owner that finalizes session-scoped companion data."""
+        self.session_stop_hook = hook
+
+    def publish(self, item: dict[str, Any]) -> None:
+        """Publish one live dashboard event from an application-owned subsystem."""
+        self._publish(item)
 
     def start_session(self) -> dict[str, Any]:
         with self._lock:
@@ -101,9 +110,6 @@ class Recorder:
                     f"script (required build: {OBSERVER_BUILD})."
                 )
             reading = self.clock.reading()
-            clock_mode = self.clock.mode
-            if self.clock.available and not self.markers.available:
-                clock_mode = "lsl_no_marker_outlet"
             session = self.database.create_session(
                 project_title=_string_or_none(
                     self.latest_snapshot.get("project_title") or self.hello.get("project_title")
@@ -118,7 +124,7 @@ class Recorder:
                 timeline_zero_utc=reading.utc_seconds,
                 monotonic_lsl_offset=reading.lsl_seconds - reading.monotonic_seconds,
                 clock_model_version="lsl-local-clock-offset-v1",
-                clock_mode=clock_mode,
+                clock_mode=self.clock.mode,
             )
             self.active_session_id = str(session["id"])
             self.database.add_clock_sample(
@@ -128,14 +134,6 @@ class Recorder:
                 monotonic_seconds=reading.monotonic_seconds,
                 utc_seconds=reading.utc_seconds,
             )
-            self.markers.start(self.active_session_id)
-            if not self.markers.available:
-                self.database.add_diagnostic(
-                    session_id=self.active_session_id,
-                    level="warning",
-                    code="lsl_marker_unavailable",
-                    message="LSL markers are unavailable; EmotiBit import will require repair",
-                )
             initial = ActivityEvent(
                 category="project",
                 action="initial_snapshot",
@@ -159,15 +157,24 @@ class Recorder:
             self._publish({"type": "session_started", "session": session, "event": stored})
             return session
 
-    def stop_session(self, session_id: str, *, interrupted: bool = False) -> dict[str, Any]:
+    def stop_session(
+        self,
+        session_id: str,
+        *,
+        interrupted: bool = False,
+        timeline_end_lsl: float | None = None,
+    ) -> dict[str, Any]:
+        """Finalize every session-owned source at one shared LSL boundary."""
         with self._lock:
             if self.active_session_id != session_id:
                 raise KeyError(session_id)
-            self.markers.stop()
+            ended_lsl = timeline_end_lsl if timeline_end_lsl is not None else self.clock.now()
+            if self.session_stop_hook is not None:
+                self.session_stop_hook(session_id, ended_lsl, interrupted)
             result = self.database.finish_session(
                 session_id,
                 "interrupted" if interrupted else "completed",
-                timeline_end_lsl=self.clock.now(),
+                timeline_end_lsl=ended_lsl,
             )
             self.active_session_id = None
         if result is None:
@@ -306,12 +313,6 @@ class Recorder:
                 queue.put_nowait(item)
 
         self._loop.call_soon_threadsafe(deliver)
-
-    def _store_marker(self, marker: dict[str, Any]) -> None:
-        session_id = self.active_session_id
-        if session_id is not None:
-            self.database.add_sync_marker(session_id, marker)
-
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()

@@ -26,7 +26,7 @@
           <span class="record-icon"></span><span id="record-label">Start recording</span>
         </button>
         <p class="muted" id="record-help">Connect the FL Studio observer to begin.</p>
-        <p class="source-hint">Start EmotiBit recording in Oscilloscope before this session.</p>
+        <p class="source-hint" id="emotibit-hint">Enable the EmotiBit LSL output in Oscilloscope.</p>
       </div>
 
       <div class="section-heading">
@@ -45,8 +45,6 @@
           <p class="muted" id="session-time">Record a session to build a searchable timeline.</p>
         </div>
         <div class="summary-actions">
-          <input id="emotibit-files" type="file" accept=".csv,.json" multiple hidden>
-          <button class="button secondary" id="import-button" disabled>Import EmotiBit</button>
           <a class="button secondary disabled" id="export-button" href="#">Export JSONL</a>
           <button class="button danger" id="delete-button" disabled>Delete</button>
         </div>

@@ -1,11 +1,48 @@
 from __future__ import annotations
 
+import time
+
 from fastapi.testclient import TestClient
 
 from fl_activity_recorder.api import create_app
 from fl_activity_recorder.config import Settings
+from fl_activity_recorder.live_signals import SignalDescriptor
 from fl_activity_recorder.observer_contract import OBSERVER_BUILD, OBSERVER_SCHEMA, OBSERVER_VERSION
 from fl_activity_recorder.protocol import DecodedMessage, MessageKind
+
+
+class EmptyLsl:
+    """Keep API tests independent from machine-level LSL streams."""
+
+    def resolve_streams(self, *, wait_time: float) -> list[object]:
+        """Return no discovered streams."""
+        del wait_time
+        return []
+
+    def local_clock(self) -> float:
+        """Use the process monotonic clock as a deterministic same-host LSL clock."""
+        return time.monotonic()
+
+
+def make_emotibit_ready(app: object) -> None:
+    """Inject one recent numeric EmotiBit sample for the Start preflight."""
+    receiver = app.state.emotibit  # type: ignore[attr-defined]
+    fake_lsl = EmptyLsl()
+    receiver.lsl = fake_lsl
+    app.state.recorder.clock._lsl = fake_lsl  # type: ignore[attr-defined]
+    track = SignalDescriptor(
+        track_id="EA",
+        type_tag="EA",
+        display_name="EDA",
+        group_name="EDA",
+        unit="microsiemens",
+        nominal_rate=15.0,
+        stream_name="EmotiBit-EA",
+        source_id="test",
+        channel_index=0,
+        channel_format="1",
+    )
+    receiver.accept_samples([track], [[0.1]], [app.state.recorder.clock.now()])  # type: ignore[attr-defined]
 
 
 def test_session_api_and_dashboard(tmp_path: object) -> None:
@@ -31,6 +68,7 @@ def test_session_api_and_dashboard(tmp_path: object) -> None:
             )
         )
         recorder.ingest(DecodedMessage(MessageKind.HEARTBEAT, 2, {}))
+        make_emotibit_ready(app)
         assert client.get("/").status_code == 200
         assert client.get("/api/health").json()["connected"] is True
         start = client.post("/api/sessions")
@@ -75,6 +113,7 @@ def test_disconnected_start_is_rejected(tmp_path: object) -> None:
     with TestClient(app) as client:
         response = client.post("/api/sessions")
         assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "emotibit_lsl_unavailable"
 
 
 def test_clock_capture_timeline_and_range_video_api(tmp_path: object) -> None:
@@ -98,6 +137,7 @@ def test_clock_capture_timeline_and_range_video_api(tmp_path: object) -> None:
                 },
             )
         )
+        make_emotibit_ready(app)
         clock = client.get("/api/clock").json()
         assert clock["mode"] in {"lsl", "monotonic_fallback"}
         session = client.post("/api/sessions").json()

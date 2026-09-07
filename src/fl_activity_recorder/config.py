@@ -42,6 +42,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8765
     enable_midi: bool = True
+    emotibit_lsl_prefix: str = "EmotiBit"
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -60,4 +61,7 @@ class Settings:
             host="127.0.0.1",
             port=int(os.environ.get("FL_ACTIVITY_PORT", "8765")),
             enable_midi=os.environ.get("FL_ACTIVITY_DISABLE_MIDI") != "1",
+            emotibit_lsl_prefix=os.environ.get(
+                "FL_ACTIVITY_EMOTIBIT_LSL_PREFIX", "EmotiBit"
+            ),
         )

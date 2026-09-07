@@ -61,6 +61,8 @@ h2 { margin-bottom: 0; font-size: 18px; }
 .source-status { display: flex; flex-wrap: wrap; gap: 8px; }
 .source-pill { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; color: var(--muted); font-size: 11px; }
 .source-pill.ready { color: var(--green); border-color: rgba(83,211,147,.35); }
+.source-pill.recording, .source-pill.aligned_unverified { color: var(--blue); border-color: rgba(105,168,255,.35); }
+.source-pill.degraded { color: var(--orange); border-color: rgba(255,122,26,.35); }
 .source-pill.interrupted, .source-pill.missing { color: var(--red); }
 #session-video { width: 100%; max-height: 54vh; background: #000; border-radius: 8px; }
 .event-ruler { position: relative; height: 18px; border-bottom: 1px solid var(--line); background: linear-gradient(90deg, transparent 49.9%, rgba(255,255,255,.05) 50%, transparent 50.1%); }

@@ -39,7 +39,7 @@ state. See [feasibility.md](docs/feasibility.md).
 - FL Studio 26.1.3+ with MIDI scripting API 42+
 - Python 3.12
 - Latest desktop Chrome for optional 720p/30fps window recording
-- EmotiBit Oscilloscope and DataParser for physiological-data sessions
+- EmotiBit Oscilloscope 1.11.1+ with LSL Output enabled for physiological-data sessions
 - Virtual MIDI: the built-in IAC Driver on macOS, or
   [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) on Windows
 
@@ -118,11 +118,11 @@ The dashboard opens locally. Recording begins only after you press **Start recor
 
 ## Unified EmotiBit timeline and screen recording
 
-The dashboard can align FL Studio events, a user-authorized Chrome window recording, and
-official EmotiBit DataParser output on one LSL-backed timeline. Complete the one-time LSL and
-DataParser configuration before collecting data, then start EmotiBit recording before starting
-the dashboard session. See [unified-timeline.md](docs/unified-timeline.md) for exact setup,
-collection, import, quality labels, and platform validation steps.
+The dashboard records numeric EmotiBit LSL streams live alongside FL Studio events and a
+user-authorized Chrome window recording. EmotiBit must be producing recent LSL samples before a
+session can start; no SD-card recording or post-session DataParser import is required. See
+[unified-timeline.md](docs/unified-timeline.md) for setup, collection, quality labels, and platform
+validation steps.
 
 The companion blocks recording when FL Studio is still running an older observer. Run the
 installer again, then reload Activity Recorder from **View → Script output** or restart FL Studio.

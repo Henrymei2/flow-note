@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
-import tempfile
-import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -19,7 +16,7 @@ from . import __version__
 from .assets import CaptureManager
 from .config import Settings
 from .database import Database
-from .emotibit import EmotiBitImporter
+from .live_signals import EmotiBitLslReceiver, LiveSignalStore
 from .midi_receiver import MidiReceiver
 from .recorder import Recorder
 
@@ -32,8 +29,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     recorder = Recorder(database)
     data_directory = resolved.data_directory or resolved.database_path.parent / "sessions"
     captures = CaptureManager(database, data_directory, recorder.clock)
-    importer = EmotiBitImporter(database, captures)
-    import_tasks: set[asyncio.Task[None]] = set()
+    signals = LiveSignalStore(database, data_directory)
+    emotibit = EmotiBitLslReceiver(
+        signals,
+        recorder.publish,
+        stream_prefix=resolved.emotibit_lsl_prefix,
+    )
+    recorder.set_session_stop_hook(
+        lambda _session_id, ended_lsl, interrupted: emotibit.finish_session(
+            ended_lsl, interrupted=interrupted
+        )
+    )
     receiver = (
         MidiReceiver(recorder, database, resolved.midi_event_port) if resolved.enable_midi else None
     )
@@ -42,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         del app
         recorder.bind_loop(asyncio.get_running_loop())
+        emotibit.start()
         if receiver is not None:
             receiver.start()
         monitor = asyncio.create_task(_heartbeat_monitor(recorder))
@@ -53,8 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 receiver.stop()
             if recorder.active_session_id is not None:
                 recorder.stop_session(recorder.active_session_id, interrupted=True)
-            if import_tasks:
-                await asyncio.gather(*import_tasks, return_exceptions=True)
+            emotibit.stop()
             database.close()
 
     app = FastAPI(title="FL Studio Activity Recorder", version=__version__, lifespan=lifespan)
@@ -62,8 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.recorder = recorder
     app.state.settings = resolved
     app.state.captures = captures
-    app.state.importer = importer
-    app.state.import_tasks = import_tasks
+    app.state.signals = signals
+    app.state.emotibit = emotibit
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
@@ -77,7 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
-        return recorder.health()
+        return _combined_health(recorder, emotibit)
 
     @app.get("/api/clock")
     async def clock() -> dict[str, Any]:
@@ -92,9 +98,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/sessions", status_code=201)
     async def start_session() -> dict[str, Any]:
+        if not recorder.clock.available or not emotibit.ready:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "emotibit_lsl_unavailable",
+                    "message": "A recent numeric EmotiBit LSL sample is required",
+                },
+            )
         try:
-            return recorder.start_session()
+            session = recorder.start_session()
+            emotibit.begin_session(str(session["id"]), float(session["timeline_zero_lsl"]))
+            return session
         except RuntimeError as exc:
+            if recorder.active_session_id is not None:
+                recorder.stop_session(recorder.active_session_id, interrupted=True)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/sessions/{session_id}/stop")
@@ -166,7 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         signals = []
         for tag in selected:
             try:
-                signals.append(importer.query(session_id, tag, start, end, pixels))
+                signals.append(app.state.signals.query(session_id, tag, start, end, pixels))
             except KeyError:
                 continue
         return {
@@ -261,72 +279,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Video is not ready") from exc
         return FileResponse(path, media_type=asset["mime_type"] or "video/webm")
 
-    @app.post("/api/sessions/{session_id}/emotibit/import", status_code=202)
-    async def import_emotibit(
-        session_id: str,
-        files: Annotated[list[UploadFile], File()],
-        replace: bool = False,
-    ) -> dict[str, str]:
-        """Stage a complete DataParser bundle and launch its import task."""
-        try:
-            session = database.get_session(session_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Session not found") from exc
-        if session["status"] == "recording":
-            raise HTTPException(status_code=409, detail="Stop the session before importing")
-        if database.has_running_import(session_id):
-            raise HTTPException(status_code=409, detail="An EmotiBit import is already running")
-        upload_root = Path(tempfile.mkdtemp(prefix="emotibit-upload-", dir=data_directory))
-        saved = []
-        names = [Path(upload.filename or "upload").name for upload in files]
-        if len(names) != len(set(names)):
-            shutil.rmtree(upload_root, ignore_errors=True)
-            raise HTTPException(status_code=422, detail="Uploaded filenames must be unique")
-        try:
-            for upload, name in zip(files, names, strict=True):
-                destination = upload_root / name
-                with destination.open("wb") as handle:
-                    while chunk := await upload.read(1024 * 1024):
-                        handle.write(chunk)
-                saved.append(destination)
-        except Exception:
-            shutil.rmtree(upload_root, ignore_errors=True)
-            raise
-        job_id = str(uuid.uuid4())
-        database.create_import_job(job_id, session_id, replace_existing=replace)
-
-        async def run_import() -> None:
-            """Execute a staged import and persist its terminal status."""
-            try:
-                result = await asyncio.to_thread(
-                    importer.import_files, session_id, saved, replace=replace
-                )
-                database.finish_import_job(job_id, "completed", result=result)
-                recorder._publish({"type": "emotibit_imported", "session_id": session_id})
-            except Exception as exc:
-                database.finish_import_job(job_id, "failed", error=str(exc))
-                database.add_diagnostic(
-                    session_id=session_id,
-                    level="error",
-                    code="emotibit_import_failed",
-                    message=str(exc),
-                )
-            finally:
-                shutil.rmtree(upload_root, ignore_errors=True)
-
-        task = asyncio.create_task(run_import())
-        import_tasks.add(task)
-        task.add_done_callback(import_tasks.discard)
-        return {"job_id": job_id, "status": "running"}
-
-    @app.get("/api/import-jobs/{job_id}")
-    async def import_job(job_id: str) -> dict[str, Any]:
-        """Return the persisted state of an EmotiBit import task."""
-        try:
-            return database.get_import_job(job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Import job not found") from exc
-
     @app.get("/api/sessions/{session_id}/export")
     async def export_session(session_id: str) -> StreamingResponse:
         try:
@@ -369,8 +321,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database.get_session(session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
-        if database.has_running_import(session_id):
-            raise HTTPException(status_code=409, detail="Wait for the EmotiBit import to finish")
         captures.delete_session_files(session_id)
         if not database.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
@@ -382,7 +332,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async def stream() -> AsyncIterator[str]:
             try:
-                yield f"data: {json.dumps({'type': 'health', 'health': recorder.health()})}\n\n"
+                initial = {"type": "health", "health": _combined_health(recorder, emotibit)}
+                yield f"data: {json.dumps(initial)}\n\n"
                 while not await request.is_disconnected():
                     try:
                         item = await asyncio.wait_for(queue.get(), timeout=15.0)
@@ -401,6 +352,11 @@ def _session_duration(session: dict[str, Any]) -> float:
     zero = _optional_float(session.get("timeline_zero_lsl"))
     end = _optional_float(session.get("timeline_end_lsl"))
     return max(0.0, end - zero) if zero is not None and end is not None else 0.0
+
+
+def _combined_health(recorder: Recorder, emotibit: EmotiBitLslReceiver) -> dict[str, Any]:
+    """Combine FL, clock, and EmotiBit readiness in one dashboard health response."""
+    return {**recorder.health(), "emotibit": emotibit.health()}
 
 
 def _optional_float(value: Any) -> float | None:

@@ -1,11 +1,11 @@
-const state = { health: null, sessions: [], selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null };
+const state = { health: null, sessions: [], selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [] };
 const $ = (id) => document.getElementById(id);
 
 async function request(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `Request failed (${response.status})`);
+    const detail = body.detail; throw new Error(detail?.message || detail || `Request failed (${response.status})`);
   }
   return response.status === 204 ? null : response.json();
 }
@@ -16,12 +16,13 @@ function toast(message) {
 }
 
 function renderHealth() {
-  const health = state.health || {}; const connected = Boolean(health.connected && health.compatible);
-  $("connection").classList.toggle("connected", connected);
-  $("connection-label").textContent = !health.connected ? "FL Studio disconnected" : health.compatible ? `FL Studio connected · ${health.clock_mode}` : "Incompatible FL observer";
-  const active = health.active_session_id; $("record-button").disabled = !connected;
+  const health = state.health || {}; const flReady = Boolean(health.connected && health.compatible); const emotibitReady = Boolean(health.emotibit?.connected); const ready = flReady && emotibitReady;
+  $("connection").classList.toggle("connected", ready);
+  $("connection-label").textContent = !flReady ? "FL Studio disconnected" : !emotibitReady ? "Waiting for EmotiBit LSL" : `FL Studio + EmotiBit connected · ${health.clock_mode}`;
+  const active = health.active_session_id; $("record-button").disabled = active ? false : !ready;
   $("record-button").classList.toggle("recording", Boolean(active)); $("record-label").textContent = active ? "Stop recording" : "Start recording";
-  $("record-help").textContent = active ? "FL events and timeline markers are recording." : connected ? "Chrome will ask you to select the FL Studio window." : "Connect the FL Studio observer to begin.";
+  $("record-help").textContent = active ? "FL events, video, and live physiology are recording." : ready ? "Chrome will ask you to select the FL Studio window." : "Connect FL Studio and enable fresh EmotiBit LSL data.";
+  const silence = health.emotibit?.silence_seconds; $("emotibit-hint").textContent = emotibitReady ? `${health.emotibit.streams.length} live physiological tracks · latest sample ${silence == null ? "now" : `${silence.toFixed(1)}s ago`}` : "Enable LSL Output in EmotiBit Oscilloscope; stream names must begin with EmotiBit.";
 }
 
 function formatDate(value) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : ""; }
@@ -40,7 +41,7 @@ function renderSessions() {
 
 function renderSelected() {
   const session = state.detail || state.selected; $("export-button").classList.toggle("disabled", !session);
-  $("delete-button").disabled = !session || session.status === "recording"; $("import-button").disabled = !session || session.status === "recording"; $("review-panel").hidden = !session;
+  $("delete-button").disabled = !session || session.status === "recording"; $("review-panel").hidden = !session;
   if (!session) return;
   $("session-status").textContent = session.status.toUpperCase(); $("session-title").textContent = session.project_title || "Untitled project";
   $("session-time").textContent = `${formatDate(session.started_at)} · ${session.event_count} timeline events`; $("export-button").href = `/api/sessions/${session.id}/export`;
@@ -67,20 +68,37 @@ function renderEvents() {
 }
 
 function renderTrackPicker() {
-  const picker = $("track-picker"); picker.replaceChildren();
-  for (const stream of state.detail.signals || []) {
+  const picker = $("track-picker"); const selected = new Set(selectedTracks()); picker.replaceChildren();
+  const recording = state.detail?.status === "recording"; const streams = recording ? state.liveDescriptors.map((item) => ({ type_tag: item.track_id, display_name: item.display_name, group_name: item.group_name, unit: item.unit })) : state.detail?.signals || [];
+  for (const stream of streams) {
     const label = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.value = stream.type_tag;
-    input.checked = ["EDA", "Heart", "Temperature"].includes(stream.group_name); input.addEventListener("change", loadTimeline);
+    input.checked = selected.has(stream.type_tag) || (!selected.size && ["EDA", "Heart", "Temperature"].includes(stream.group_name)); input.addEventListener("change", recording ? renderLiveSignals : loadTimeline);
     label.append(input, document.createTextNode(`${stream.display_name}${stream.unit ? ` (${stream.unit})` : ""}`)); picker.append(label);
   }
-  loadTimeline();
+  recording ? renderLiveSignals() : loadTimeline();
 }
 
 function selectedTracks() { return [...$("track-picker").querySelectorAll("input:checked")].map((input) => input.value); }
 async function loadTimeline() {
-  if (!state.detail) return; const duration = Math.max(1, sessionDuration(state.detail)); const zoom = Number($("zoom").value || 1); const width = duration / zoom;
+  if (!state.detail || state.detail.status === "recording") return; const duration = Math.max(1, sessionDuration(state.detail)); const zoom = Number($("zoom").value || 1); const width = duration / zoom;
   const start = Math.max(0, Math.min(duration - width, state.currentTime - width / 2)); const params = new URLSearchParams({ start, end: Math.min(duration, start + width), pixels: 1200, tracks: selectedTracks().join(",") });
   state.timeline = await request(`/api/sessions/${state.detail.id}/timeline?${params}`); drawSignals();
+}
+
+function appendLiveSamples(item) {
+  if (state.selected?.id !== item.session_id) return;
+  let latest = 0;
+  for (const track of item.tracks) {
+    const points = state.liveBuffers.get(track.type_tag) || []; points.push(...track.points); if (points.length) latest = Math.max(latest, points.at(-1)[0]); state.liveBuffers.set(track.type_tag, points);
+  }
+  const cutoff = Math.max(0, latest - 30); for (const [tag, points] of state.liveBuffers) state.liveBuffers.set(tag, points.filter((point) => point[0] >= cutoff));
+  state.currentTime = latest; renderLiveSignals();
+}
+
+function renderLiveSignals() {
+  if (state.detail?.status !== "recording") return;
+  const tracks = selectedTracks(); const all = [...state.liveBuffers.values()].flat(); const end = all.length ? Math.max(...all.map((point) => point[0])) : 30; const start = Math.max(0, end - 30);
+  state.timeline = { start, end: Math.max(start + 0.001, end), events: state.events.filter((event) => event.timeline_seconds >= start), signals: tracks.map((type_tag) => ({ type_tag, mode: "raw", points: state.liveBuffers.get(type_tag) || [] })) }; drawSignals(); seekTimeline(end);
 }
 
 function drawSignals() {
@@ -162,7 +180,7 @@ async function stopRecording() {
       capture.stream.getTracks().forEach((track) => track.stop()); state.capture = null;
     }
   }
-  await request(`/api/sessions/${active}/stop`, { method: "POST" }); toast("Recording stopped"); await refreshAll();
+  await request(`/api/sessions/${active}/stop`, { method: "POST" }); state.liveBuffers.clear(); toast("Recording stopped"); await refreshAll();
   if (captureError) throw captureError;
 }
 
@@ -176,10 +194,8 @@ async function refreshAll() { await Promise.all([loadHealth(), loadSessions()]);
 $("record-button").addEventListener("click", async () => { try { state.health?.active_session_id ? await stopRecording() : await startRecording(); } catch (error) { toast(error.message); } });
 $("refresh-sessions").addEventListener("click", refreshAll);
 $("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; renderEvents(); renderSelected(); await loadSessions(); toast("Session deleted"); });
-$("import-button").addEventListener("click", () => $("emotibit-files").click());
-$("emotibit-files").addEventListener("change", async (event) => { if (!state.selected || !event.target.files.length) return; const body = new FormData(); [...event.target.files].forEach((file) => body.append("files", file)); const job = await request(`/api/sessions/${state.selected.id}/emotibit/import`, { method: "POST", body }); toast("EmotiBit import started"); const timer = setInterval(async () => { const status = await request(`/api/import-jobs/${job.job_id}`); if (status.status !== "running") { clearInterval(timer); toast(status.status === "completed" ? "EmotiBit import complete" : status.error); await selectSession(state.selected); } }, 1000); });
 for (const id of ["category", "confidence"]) $(id).addEventListener("change", loadEvents);
 let searchTimer; $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadEvents, 250); });
 $("playhead").addEventListener("input", (event) => seekTimeline(event.target.value)); $("zoom").addEventListener("change", loadTimeline); $("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
-const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = item.health; renderHealth(); } if (["session_started", "session_stopped", "emotibit_imported"].includes(item.type)) await refreshAll(); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); renderEvents(); } }; live.onerror = () => $("connection").classList.remove("connected");
+const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = { ...state.health, ...item.health }; renderHealth(); } if (item.type === "emotibit_status") { state.health = { ...state.health, emotibit: item.emotibit }; state.liveDescriptors = item.emotibit.streams || []; renderHealth(); if (state.detail?.status === "recording") renderTrackPicker(); } if (["session_started", "session_stopped"].includes(item.type)) await refreshAll(); if (item.type === "emotibit_samples") appendLiveSamples(item); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); renderEvents(); if (state.detail?.status === "recording") renderLiveSignals(); } }; live.onerror = () => $("connection").classList.remove("connected");
 Promise.all([loadHealth(), loadSessions()]).catch((error) => toast(error.message));

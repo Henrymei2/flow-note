@@ -14,7 +14,7 @@ The dashboard binds exclusively to `127.0.0.1`. The application contains no clou
 - macOS: `~/Library/Application Support/FLActivityRecorder/activity.db`
 - Windows: `%LOCALAPPDATA%\FLActivityRecorder\activity.db`
 
-Per-session video, imported EmotiBit source files, and normalized signal arrays are stored in
+Per-session video and live EmotiBit LSL signal chunks are stored in
 the adjacent `sessions/<session-id>/` directory. Deleting a session permanently deletes both its
 database rows and owned asset directory.
 
