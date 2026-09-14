@@ -29,6 +29,10 @@ mkdir -p "$INSTALL_ROOT"
 VENV_PYTHON="$INSTALL_ROOT/.venv/bin/python"
 "$VENV_PYTHON" -m pip install --upgrade pip
 "$VENV_PYTHON" -m pip install --upgrade "$REPO_ROOT"
+if [ -f "$REPO_ROOT/.env" ]; then
+    cp "$REPO_ROOT/.env" "$INSTALL_ROOT/.env"
+    chmod 600 "$INSTALL_ROOT/.env"
+fi
 INSTALLED_CONTRACT=$("$VENV_PYTHON" -c 'from fl_activity_recorder import __version__; from fl_activity_recorder.observer_contract import OBSERVER_BUILD, OBSERVER_SCHEMA; print("companion={} schema={} build={}".format(__version__, OBSERVER_SCHEMA, OBSERVER_BUILD))')
 
 HARDWARE_ROOT="$FL_USER_DATA_ROOT/Settings/Hardware/ActivityRecorder"

@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
 
 from . import __version__
 from .assets import CaptureManager
@@ -18,7 +27,9 @@ from .config import Settings
 from .database import Database
 from .live_signals import EmotiBitLslReceiver, LiveSignalStore
 from .midi_receiver import MidiReceiver
+from .r2_storage import R2Storage, R2StorageError
 from .recorder import Recorder
+from .research_archive import ResearchArchiveError, ResearchArchiveManager
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -30,6 +41,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     data_directory = resolved.data_directory or resolved.database_path.parent / "sessions"
     captures = CaptureManager(database, data_directory, recorder.clock)
     signals = LiveSignalStore(database, data_directory)
+    research_archives = ResearchArchiveManager(database, data_directory)
+    r2 = R2Storage(resolved)
     emotibit = EmotiBitLslReceiver(
         signals,
         recorder.publish,
@@ -70,6 +83,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.captures = captures
     app.state.signals = signals
     app.state.emotibit = emotibit
+    app.state.research_archives = research_archives
+    app.state.r2 = r2
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
@@ -95,6 +110,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "utc_seconds": reading.utc_seconds,
             "mode": recorder.clock.mode,
         }
+
+    @app.get("/api/sharing")
+    async def sharing_status() -> dict[str, Any]:
+        """Return non-secret Cloudflare R2 configuration state."""
+        return r2.public_status()
+
+    @app.get("/api/cloud-sessions")
+    async def list_cloud_sessions() -> list[dict[str, Any]]:
+        """List downloadable research sessions published in R2."""
+        try:
+            return await asyncio.to_thread(r2.list_sessions)
+        except R2StorageError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/cloud-sessions/download")
+    async def download_cloud_session(key: str = Query(min_length=1)) -> RedirectResponse:
+        """Redirect to a short-lived signed URL for one cataloged R2 archive."""
+        try:
+            url = r2.create_download_url(key)
+        except R2StorageError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RedirectResponse(url=url, status_code=307)
 
     @app.post("/api/sessions", status_code=201)
     async def start_session() -> dict[str, Any]:
@@ -312,6 +349,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         headers = {"Content-Disposition": f'attachment; filename="session-{session_id}.jsonl"'}
         return StreamingResponse(lines(), media_type="application/x-ndjson", headers=headers)
+
+    @app.get("/api/sessions/{session_id}/share")
+    async def share_session(session_id: str) -> FileResponse:
+        """Download a complete, portable research archive for one finished session."""
+        try:
+            path = await asyncio.to_thread(research_archives.export, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        except ResearchArchiveError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=f"fl-studio-research-session-{session_id}.zip",
+            background=BackgroundTask(path.unlink, missing_ok=True),
+        )
+
+    @app.post("/api/sessions/{session_id}/cloud-share", status_code=201)
+    async def cloud_share_session(session_id: str) -> dict[str, Any]:
+        """Upload a complete session archive and return a temporary private link."""
+        path: Path | None = None
+        try:
+            session = database.get_session(session_id)
+            path = await asyncio.to_thread(research_archives.export, session_id)
+            return await asyncio.to_thread(r2.upload_archive, session_id, path, session)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        except ResearchArchiveError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except R2StorageError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            if path is not None:
+                path.unlink(missing_ok=True)
+
+    @app.post("/api/research-archives", status_code=201)
+    async def import_research_archive(request: Request) -> dict[str, Any]:
+        """Verify and import a portable research archive uploaded as a ZIP body."""
+        handle, temporary_name = tempfile.mkstemp(
+            prefix="research-upload-", suffix=".zip", dir=data_directory
+        )
+        os.close(handle)
+        temporary = Path(temporary_name)
+        size = 0
+        try:
+            with temporary.open("wb") as output:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 100 * 1024**3:
+                        raise HTTPException(status_code=413, detail="Archive is too large")
+                    output.write(chunk)
+            if size == 0:
+                raise HTTPException(status_code=422, detail="Choose a research archive ZIP")
+            return await asyncio.to_thread(research_archives.import_archive, temporary)
+        except ResearchArchiveError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @app.delete("/api/sessions/{session_id}", status_code=204)
     async def delete_session(session_id: str) -> Response:

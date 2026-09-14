@@ -1,4 +1,4 @@
-const state = { health: null, sessions: [], selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [] };
+const state = { health: null, sharing: null, sessions: [], cloudSessions: [], selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [] };
 const $ = (id) => document.getElementById(id);
 
 async function request(url, options = {}) {
@@ -27,6 +27,7 @@ function renderHealth() {
 
 function formatDate(value) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : ""; }
 function formatTime(seconds) { const value = Math.max(0, Number(seconds) || 0); return `${String(Math.floor(value / 60)).padStart(2, "0")}:${(value % 60).toFixed(3).padStart(6, "0")}`; }
+function formatBytes(bytes) { const value = Math.max(0, Number(bytes) || 0); if (value < 1024) return `${value} B`; const units = ["KB", "MB", "GB", "TB"]; let amount = value / 1024, index = 0; while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; } return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${units[index]}`; }
 function sessionDuration(session) { return Math.max(0, (session.timeline_end_lsl || session.timeline_zero_lsl || 0) - (session.timeline_zero_lsl || 0)); }
 
 function renderSessions() {
@@ -39,12 +40,22 @@ function renderSessions() {
   }
 }
 
+function renderCloudSessions(message = "") {
+  const list = $("cloud-session-list"); const empty = $("cloud-sessions-empty"); list.replaceChildren(); empty.hidden = state.cloudSessions.length > 0; empty.textContent = message || (state.sharing?.configured ? "No sessions have been uploaded yet." : "Cloud sharing is not configured on this device.");
+  for (const session of state.cloudSessions) {
+    const link = document.createElement("a"); link.className = "session-item cloud"; link.href = `/api/cloud-sessions/download?key=${encodeURIComponent(session.archive_key)}`;
+    const title = document.createElement("strong"); title.textContent = session.project_title || "Untitled project";
+    const detail = document.createElement("span"); detail.textContent = `${formatDate(session.started_at)} · ${session.event_count} events · ${formatBytes(session.size_bytes)}`;
+    link.append(title, detail); list.append(link);
+  }
+}
+
 function renderSelected() {
-  const session = state.detail || state.selected; $("export-button").classList.toggle("disabled", !session);
+  const session = state.detail || state.selected; const complete = session && session.status !== "recording" && session.video_status === "ready" && session.emotibit_status === "ready"; const cloudReady = complete && state.sharing?.configured; $("event-export-button").classList.toggle("disabled", !session); $("share-button").classList.toggle("disabled", !complete); $("cloud-share-button").disabled = !cloudReady; $("cloud-share-button").classList.toggle("disabled", !cloudReady); $("share-button").title = complete ? "Download video, physiology, and FL Studio events" : "A completed video and physiological recording are required"; $("cloud-share-button").title = !state.sharing?.configured ? "Add Cloudflare R2 credentials to enable private links" : $("share-button").title;
   $("delete-button").disabled = !session || session.status === "recording"; $("review-panel").hidden = !session;
   if (!session) return;
   $("session-status").textContent = session.status.toUpperCase(); $("session-title").textContent = session.project_title || "Untitled project";
-  $("session-time").textContent = `${formatDate(session.started_at)} · ${session.event_count} timeline events`; $("export-button").href = `/api/sessions/${session.id}/export`;
+  $("session-time").textContent = `${formatDate(session.started_at)} · ${session.event_count} timeline events`; $("event-export-button").href = `/api/sessions/${session.id}/export`; $("share-button").href = `/api/sessions/${session.id}/share`;
   if (!state.detail) return;
   const statuses = [["FL events", "ready"], ["Video", session.video_status], ["EmotiBit", session.emotibit_status], ["Sync", session.sync_quality]];
   const statusBox = $("source-status"); statusBox.replaceChildren();
@@ -185,17 +196,35 @@ async function stopRecording() {
 }
 
 async function loadHealth() { state.health = await request("/api/health"); renderHealth(); }
+async function loadSharing() { state.sharing = await request("/api/sharing"); renderSelected(); }
+async function loadCloudSessions() { if (!state.sharing?.configured) { state.cloudSessions = []; renderCloudSessions(); return; } try { state.cloudSessions = await request("/api/cloud-sessions"); renderCloudSessions(); } catch (error) { state.cloudSessions = []; renderCloudSessions(error.message); } }
 async function loadSessions() { state.sessions = await request("/api/sessions"); if (state.selected) state.selected = state.sessions.find((item) => item.id === state.selected.id) || null; renderSessions(); renderSelected(); }
 async function selectSession(session) { state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); renderSessions(); renderSelected(); await Promise.all([loadCategories(), loadEvents()]); }
 async function loadCategories() { const select = $("category"), selected = select.value; const categories = state.selected ? await request(`/api/sessions/${state.selected.id}/categories`) : []; select.replaceChildren(new Option("All activity", "")); categories.forEach((value) => select.append(new Option(value, value))); select.value = categories.includes(selected) ? selected : ""; }
 async function loadEvents() { if (!state.selected) return; const params = new URLSearchParams(); if ($("category").value) params.set("category", $("category").value); if ($("confidence").value) params.set("confidence", $("confidence").value); if ($("search").value) params.set("search", $("search").value); state.events = await request(`/api/sessions/${state.selected.id}/events?${params}`); renderEvents(); }
-async function refreshAll() { await Promise.all([loadHealth(), loadSessions()]); if (state.selected) await selectSession(state.selected); }
+async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions()]); await loadCloudSessions(); if (state.selected) await selectSession(state.selected); }
 
 $("record-button").addEventListener("click", async () => { try { state.health?.active_session_id ? await stopRecording() : await startRecording(); } catch (error) { toast(error.message); } });
 $("refresh-sessions").addEventListener("click", refreshAll);
+$("import-button").addEventListener("click", () => $("import-file").click());
+$("import-file").addEventListener("change", async (event) => {
+  const file = event.target.files[0]; if (!file) return;
+  $("import-button").disabled = true; $("import-button").textContent = "Verifying and importing…";
+  try { const imported = await request("/api/research-archives", { method: "POST", headers: { "Content-Type": "application/zip" }, body: file }); await loadSessions(); const session = state.sessions.find((item) => item.id === imported.id); if (session) await selectSession(session); toast("Research session imported and verified"); }
+  catch (error) { toast(error.message); }
+  finally { event.target.value = ""; $("import-button").disabled = false; $("import-button").textContent = "Import research archive"; }
+});
+$("cloud-share-button").addEventListener("click", async () => {
+  if (!state.selected) return; const button = $("cloud-share-button"); button.disabled = true; button.textContent = "Uploading…";
+  try { const shared = await request(`/api/sessions/${state.selected.id}/cloud-share`, { method: "POST" }); await loadCloudSessions(); $("share-link").value = shared.download_url; const days = shared.expires_in_seconds / 86400; $("share-expiry").textContent = `Uploaded to Cloud sessions. This direct link expires in ${Number.isInteger(days) ? days : days.toFixed(1)} days.`; $("share-modal").hidden = false; await navigator.clipboard.writeText(shared.download_url).then(() => toast("Session uploaded and link copied"), () => toast("Session uploaded to cloud")); }
+  catch (error) { toast(error.message); }
+  finally { button.textContent = "Upload to cloud"; renderSelected(); }
+});
+$("copy-share-link").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("share-link").value); toast("Private link copied"); } catch { $("share-link").select(); toast("Select and copy the link"); } });
+$("close-share-modal").addEventListener("click", () => { $("share-modal").hidden = true; });
 $("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; renderEvents(); renderSelected(); await loadSessions(); toast("Session deleted"); });
 for (const id of ["category", "confidence"]) $(id).addEventListener("change", loadEvents);
 let searchTimer; $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadEvents, 250); });
 $("playhead").addEventListener("input", (event) => seekTimeline(event.target.value)); $("zoom").addEventListener("change", loadTimeline); $("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
 const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = { ...state.health, ...item.health }; renderHealth(); } if (item.type === "emotibit_status") { state.health = { ...state.health, emotibit: item.emotibit }; state.liveDescriptors = item.emotibit.streams || []; renderHealth(); if (state.detail?.status === "recording") renderTrackPicker(); } if (["session_started", "session_stopped"].includes(item.type)) await refreshAll(); if (item.type === "emotibit_samples") appendLiveSamples(item); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); renderEvents(); if (state.detail?.status === "recording") renderLiveSignals(); } }; live.onerror = () => $("connection").classList.remove("connected");
-Promise.all([loadHealth(), loadSessions()]).catch((error) => toast(error.message));
+Promise.all([loadHealth(), loadSharing(), loadSessions()]).then(loadCloudSessions).catch((error) => toast(error.message));

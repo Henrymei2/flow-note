@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import io
+import json
 import time
+import zipfile
 
 from fastapi.testclient import TestClient
 
@@ -22,6 +26,63 @@ class EmptyLsl:
     def local_clock(self) -> float:
         """Use the process monotonic clock as a deterministic same-host LSL clock."""
         return time.monotonic()
+
+
+class FakeR2Client:
+    """Capture uploads without making API tests depend on Cloudflare."""
+
+    def __init__(self) -> None:
+        self.upload: dict[str, object] | None = None
+        self.objects: dict[str, bytes] = {}
+
+    def upload_file(
+        self,
+        filename: str,
+        bucket: str,
+        key: str,
+        *,
+        ExtraArgs: dict[str, object],
+        Config: object,
+    ) -> None:
+        del Config
+        with open(filename, "rb") as handle:
+            content = handle.read()
+        self.upload = {
+            "bucket": bucket,
+            "key": key,
+            "extra_args": ExtraArgs,
+            "content": content,
+        }
+        self.objects[key] = content
+
+    def put_object(
+        self,
+        *,
+        Bucket: str,
+        Key: str,
+        Body: bytes,
+        ContentType: str,
+        CacheControl: str,
+    ) -> None:
+        del Bucket, ContentType, CacheControl
+        self.objects[Key] = Body
+
+    def list_objects_v2(self, **arguments: object) -> dict[str, object]:
+        prefix = str(arguments.get("Prefix") or "")
+        return {
+            "Contents": [{"Key": key} for key in self.objects if key.startswith(prefix)],
+            "IsTruncated": False,
+        }
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        del Bucket
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+    def generate_presigned_url(
+        self, operation: str, *, Params: dict[str, str], ExpiresIn: int
+    ) -> str:
+        assert operation == "get_object"
+        return f"https://download.test/{Params['Key']}?expires={ExpiresIn}"
 
 
 def make_emotibit_ready(app: object) -> None:
@@ -180,3 +241,147 @@ def test_clock_capture_timeline_and_range_video_api(tmp_path: object) -> None:
         video = client.get(f"/api/sessions/{session['id']}/video", headers={"Range": "bytes=0-3"})
         assert video.status_code == 206
         assert video.content == b"webm"
+
+
+def test_complete_research_archive_round_trip(tmp_path: object) -> None:
+    settings = Settings(
+        database_path=tmp_path / "test.db",  # type: ignore[operator]
+        data_directory=tmp_path / "sessions",  # type: ignore[operator]
+        enable_midi=False,
+        r2_account_id="0123456789abcdef0123456789abcdef",
+        r2_bucket_name="research-sessions",
+        r2_access_key_id="test-access",
+        r2_secret_access_key="test-secret",
+        r2_endpoint=("https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com"),
+    )
+    app = create_app(settings)
+    fake_r2 = FakeR2Client()
+    app.state.r2._client = fake_r2
+    with TestClient(app) as client:
+        recorder = app.state.recorder
+        recorder.ingest(
+            DecodedMessage(
+                MessageKind.HELLO,
+                1,
+                {
+                    "api_version": 45,
+                    "project_title": "Share Test",
+                    "observer_version": OBSERVER_VERSION,
+                    "observer_schema": OBSERVER_SCHEMA,
+                    "observer_build": OBSERVER_BUILD,
+                },
+            )
+        )
+        make_emotibit_ready(app)
+        session = client.post("/api/sessions").json()
+        zero = float(session["timeline_zero_lsl"])
+        descriptor = SignalDescriptor(
+            track_id="EA",
+            type_tag="EA",
+            display_name="EDA",
+            group_name="EDA",
+            unit="microsiemens",
+            nominal_rate=15.0,
+            stream_name="EmotiBit-EA",
+            source_id="test",
+            channel_index=0,
+            channel_format="1",
+        )
+        app.state.signals.append(descriptor, [zero + 0.25, zero + 0.5], [1.25, 1.5])
+        capture = client.post(
+            f"/api/sessions/{session['id']}/capture/start",
+            json={
+                "started_lsl": app.state.recorder.clock.now(),
+                "mime_type": "video/webm",
+                "metadata": {"has_audio": True},
+            },
+        )
+        assert capture.status_code == 200
+        assert (
+            client.post(
+                f"/api/sessions/{session['id']}/capture/chunks/0", content=b"video-data"
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"/api/sessions/{session['id']}/capture/complete",
+                json={"ended_lsl": zero + 1, "duration_seconds": 1},
+            ).status_code
+            == 200
+        )
+        recorder.ingest(
+            DecodedMessage(
+                MessageKind.EVENT,
+                2,
+                {
+                    "category": "transport",
+                    "action": "play",
+                    "summary": "Playback started",
+                    "confidence": "exact",
+                },
+            )
+        )
+        assert client.post(f"/api/sessions/{session['id']}/stop").status_code == 200
+
+        shared = client.get(f"/api/sessions/{session['id']}/share")
+        assert shared.status_code == 200
+        assert shared.headers["content-type"] == "application/zip"
+        with zipfile.ZipFile(io.BytesIO(shared.content)) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            assert manifest["format_version"] == 1
+            assert manifest["video"]["file"] == "media/video.webm"
+            assert len(manifest["physiology"]) == 1
+            assert "Playback started" in archive.read("events/events.jsonl").decode()
+            for name, expected in manifest["checksums"].items():
+                data = archive.read(name)
+                assert len(data) == expected["bytes"]
+                assert hashlib.sha256(data).hexdigest() == expected["sha256"]
+
+        cloud_shared = client.post(f"/api/sessions/{session['id']}/cloud-share")
+        assert cloud_shared.status_code == 201
+        assert cloud_shared.json()["download_url"].startswith("https://download.test/")
+        assert fake_r2.upload is not None
+        assert fake_r2.upload["bucket"] == "research-sessions"
+        assert bytes(fake_r2.upload["content"]).startswith(b"PK")  # type: ignore[arg-type]
+        cloud_sessions = client.get("/api/cloud-sessions")
+        assert cloud_sessions.status_code == 200
+        assert cloud_sessions.json()[0]["project_title"] == "Share Test"
+        assert cloud_sessions.json()[0]["event_count"] == 2
+        assert cloud_sessions.json()[0]["archive_key"] == cloud_shared.json()["object_key"]
+        download = client.get(
+            "/api/cloud-sessions/download",
+            params={"key": cloud_shared.json()["object_key"]},
+            follow_redirects=False,
+        )
+        assert download.status_code == 307
+        assert download.headers["location"].startswith("https://download.test/")
+
+        imported = client.post(
+            "/api/research-archives",
+            content=shared.content,
+            headers={"Content-Type": "application/zip"},
+        )
+        assert imported.status_code == 201
+        imported_session = imported.json()
+        assert imported_session["id"] != session["id"]
+        assert imported_session["source_session_id"] == session["id"]
+        detail = client.get(f"/api/sessions/{imported_session['id']}").json()
+        assert detail["video_status"] == "ready"
+        assert detail["emotibit_status"] == "ready"
+        assert detail["event_count"] == 2
+        timeline = client.get(
+            f"/api/sessions/{imported_session['id']}/timeline",
+            params={"start": 0, "end": 1, "tracks": "EA"},
+        ).json()
+        assert timeline["signals"][0]["points"] == [[0.25, 1.25], [0.5, 1.5]]
+        assert client.get(f"/api/sessions/{imported_session['id']}/video").content == b"video-data"
+
+        session_count = len(client.get("/api/sessions").json())
+        invalid = client.post(
+            "/api/research-archives",
+            content=b"not a zip",
+            headers={"Content-Type": "application/zip"},
+        )
+        assert invalid.status_code == 422
+        assert len(client.get("/api/sessions").json()) == session_count

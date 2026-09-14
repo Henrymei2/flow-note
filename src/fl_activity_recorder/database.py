@@ -313,6 +313,62 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def create_imported_session(self, source: dict[str, Any]) -> dict[str, Any]:
+        """Create a terminal session from a verified portable research archive."""
+        try:
+            requested_id = str(uuid.UUID(str(source.get("id"))))
+        except (ValueError, TypeError, AttributeError):
+            requested_id = str(uuid.uuid4())
+        with self._lock:
+            exists = self._connection.execute(
+                "SELECT 1 FROM sessions WHERE id=?", (requested_id,)
+            ).fetchone()
+        session_id = str(uuid.uuid4()) if exists else requested_id
+        status = str(source.get("status") or "completed")
+        if status not in {"completed", "interrupted"}:
+            status = "completed"
+        fields = (
+            "started_at",
+            "ended_at",
+            "project_title",
+            "fl_version",
+            "api_version",
+            "recorder_version",
+            "observer_version",
+            "observer_build",
+            "timeline_zero_lsl",
+            "timeline_zero_monotonic",
+            "timeline_zero_utc",
+            "monotonic_lsl_offset",
+            "clock_model_version",
+            "timeline_end_lsl",
+            "clock_mode",
+            "video_status",
+            "emotibit_status",
+            "sync_quality",
+        )
+        defaults: dict[str, Any] = {
+            "started_at": utc_now(),
+            "recorder_version": "imported",
+            "video_status": "missing",
+            "emotibit_status": "missing",
+            "sync_quality": "pending",
+        }
+        values = [
+            defaults.get(name)
+            if source.get(name) is None and name in defaults
+            else source.get(name)
+            for name in fields
+        ]
+        with self.transaction() as connection:
+            connection.execute(
+                f"""INSERT INTO sessions
+                    (id, status, {",".join(fields)})
+                    VALUES (?, ?, {",".join("?" for _ in fields)})""",
+                (session_id, status, *values),
+            )
+        return self.get_session(session_id)
+
     def delete_session(self, session_id: str) -> bool:
         with self.transaction() as connection:
             cursor = connection.execute("DELETE FROM sessions WHERE id=?", (session_id,))

@@ -30,11 +30,19 @@
       </div>
 
       <div class="section-heading">
-        <h2>Sessions</h2>
-        <button class="icon-button" id="refresh-sessions" title="Refresh sessions">↻</button>
+        <h2>Local sessions</h2>
+        <button class="icon-button" id="refresh-sessions" title="Refresh local and cloud sessions">↻</button>
       </div>
+      <button class="button secondary import-button" id="import-button">Import research archive</button>
+      <input id="import-file" type="file" accept=".zip,application/zip" hidden>
       <div id="session-list" class="session-list"></div>
       <p class="empty muted" id="sessions-empty">No recordings yet.</p>
+
+      <div class="section-heading cloud-heading">
+        <h2>Cloud sessions</h2>
+      </div>
+      <div id="cloud-session-list" class="session-list"></div>
+      <p class="empty muted" id="cloud-sessions-empty">Refresh to check R2.</p>
     </aside>
 
     <section class="content">
@@ -45,7 +53,9 @@
           <p class="muted" id="session-time">Record a session to build a searchable timeline.</p>
         </div>
         <div class="summary-actions">
-          <a class="button secondary disabled" id="export-button" href="#">Export JSONL</a>
+          <a class="button secondary disabled" id="event-export-button" href="#">Events JSONL</a>
+          <a class="button secondary disabled" id="share-button" href="#">Download archive</a>
+          <button class="button disabled" id="cloud-share-button" disabled>Upload to cloud</button>
           <button class="button danger" id="delete-button" disabled>Delete</button>
         </div>
       </div>
@@ -98,6 +108,18 @@
 
   <div class="toast" id="toast" role="status"></div>
   <div class="modal" id="capture-modal" hidden><div class="modal-card"><h2>Select FL Studio</h2><p>Chrome will ask which window to share. Select the FL Studio window. Audio is used when Chrome provides it.</p></div></div>
+  <div class="modal" id="share-modal" hidden>
+    <div class="modal-card share-card">
+      <h2>Private research link</h2>
+      <p class="muted" id="share-expiry"></p>
+      <input id="share-link" type="text" readonly aria-label="Temporary research archive link">
+      <div class="summary-actions">
+        <button class="button" id="copy-share-link">Copy link</button>
+        <button class="button secondary" id="close-share-modal">Done</button>
+      </div>
+      <p class="source-hint">Anyone with this link can download the archive until it expires. Send it only through an approved research channel.</p>
+    </div>
+  </div>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -163,6 +163,16 @@ folder until deleted from the dashboard. Project titles, channel names, plugin n
 and parameter labels are stored; project paths are not collected. See
 [privacy.md](docs/privacy.md).
 
+## Sharing with researchers
+
+For a finished session with ready video and EmotiBit data, choose **Download archive** to save a
+versioned, checksummed ZIP containing WebM video, CSV physiological channels, and CSV/JSONL FL
+Studio events. When private Cloudflare R2 sharing is configured, **Upload to cloud** stores the
+same immutable archive in a shared catalog. Collaborators can refresh **Cloud sessions**, download
+the ZIP, and restore it with **Import research archive** on their own recorder. See
+[data-sharing.md](docs/data-sharing.md) for R2 setup, the archive layout, timeline convention, and
+handling recommendations for human-subject data.
+
 ## Documentation
 
 - [Feasibility and capture boundaries](docs/feasibility.md)
@@ -171,3 +181,4 @@ and parameter labels are stored; project paths are not collected. See
 - [Troubleshooting](docs/troubleshooting.md)
 - [Real FL Studio validation](docs/real-fl-validation.md)
 - [Unified timeline setup and validation](docs/unified-timeline.md)
+- [Sharing research sessions](docs/data-sharing.md)

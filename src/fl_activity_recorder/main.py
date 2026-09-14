@@ -24,6 +24,14 @@ def main() -> None:
             host="127.0.0.1",
             port=args.port,
             enable_midi=settings.enable_midi,
+            emotibit_lsl_prefix=settings.emotibit_lsl_prefix,
+            r2_account_id=settings.r2_account_id,
+            r2_bucket_name=settings.r2_bucket_name,
+            r2_access_key_id=settings.r2_access_key_id,
+            r2_secret_access_key=settings.r2_secret_access_key,
+            r2_endpoint=settings.r2_endpoint,
+            r2_region=settings.r2_region,
+            r2_share_expiry_seconds=settings.r2_share_expiry_seconds,
         )
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, args=(f"http://127.0.0.1:{settings.port}",)).start()
