@@ -1,0 +1,59 @@
+{
+  "patchboard":{
+    "settings":{
+      "input":{
+        "type":"EmotiBit"
+      },
+      "output":{
+        "type":"LSL",
+        "meta-data":{ 
+          // See XDF meta-data examples at https://github.com/sccn/xdf/wiki/EEG-Meta-Data
+          // source_id gathered from EmotiBit Serial Number
+          // In the future nominal_srate may be gathered from device
+          "channels":[
+            {"name":"EmotiBit PR", "type":"PPGRed", "nominal_srate":25.0},
+            {"name":"EmotiBit PI", "type":"PPGInfrared", "nominal_srate":25.0},
+            {"name":"EmotiBit PG", "type":"PPGGreen", "nominal_srate":25.0},
+            {"name":"EmotiBit HR", "type":"HeartRate", "nominal_srate":0.0},
+            {"name":"EmotiBit EA", "type":"EDA", "nominal_srate":15.0},
+            {"name":"EmotiBit SA", "type":"SCRAmplitude", "nominal_srate":0.0},
+            {"name":"EmotiBit SR", "type":"SCRRiseTime", "nominal_srate":0.0},
+            {"name":"EmotiBit SF", "type":"SCRFrequency", "nominal_srate":0.0},
+            {"name":"EmotiBit T1", "type":"Temperature", "nominal_srate":7.5},
+            {"name":"EmotiBit TH", "type":"Thermopile", "nominal_srate":7.5},
+            {"name":"EmotiBit AX", "type":"AccelerometerX", "nominal_srate":25.0},
+            {"name":"EmotiBit AY", "type":"AccelerometerY", "nominal_srate":25.0},
+            {"name":"EmotiBit AZ", "type":"AccelerometerZ", "nominal_srate":25.0},
+            {"name":"EmotiBit GX", "type":"GyroscopeX", "nominal_srate":25.0},
+            {"name":"EmotiBit GY", "type":"GyroscopeY", "nominal_srate":25.0},
+            {"name":"EmotiBit GZ", "type":"GyroscopeZ", "nominal_srate":25.0},
+            {"name":"EmotiBit MX", "type":"MagnetometerX", "nominal_srate":25.0},
+            {"name":"EmotiBit MY", "type":"MagnetometerY", "nominal_srate":25.0},
+            {"name":"EmotiBit MZ", "type":"MagnetometerZ", "nominal_srate":25.0}
+          ]
+        }    
+      }
+    },
+    "patchcords":[
+      {"input":"PR", "output":"EmotiBit PR"},
+      {"input":"PI", "output":"EmotiBit PI"},
+      {"input":"PG", "output":"EmotiBit PG"},
+      {"input":"HR", "output":"EmotiBit HR"},
+      {"input":"EA", "output":"EmotiBit EA"},
+      {"input":"SA", "output":"EmotiBit SA"},
+      {"input":"SR", "output":"EmotiBit SR"},
+      {"input":"SF", "output":"EmotiBit SF"},
+      {"input":"T1", "output":"EmotiBit T1"},
+      {"input":"TH", "output":"EmotiBit TH"},
+      {"input":"AX", "output":"EmotiBit AX"},
+      {"input":"AY", "output":"EmotiBit AY"},
+      {"input":"AZ", "output":"EmotiBit AZ"},
+      {"input":"GX", "output":"EmotiBit GX"},
+      {"input":"GY", "output":"EmotiBit GY"},
+      {"input":"GZ", "output":"EmotiBit GZ"},
+      {"input":"MX", "output":"EmotiBit MX"},
+      {"input":"MY", "output":"EmotiBit MY"},
+      {"input":"MZ", "output":"EmotiBit MZ"}
+    ]
+  }
+}
