@@ -37,7 +37,7 @@ state. See [feasibility.md](docs/feasibility.md).
 
 - macOS supported by FL Studio, or Windows 10/11
 - FL Studio 26.1.3+ with MIDI scripting API 42+
-- Python 3.12
+- Python 3.12 or newer (including Python 3.14)
 - Latest desktop Chrome for optional 720p/30fps window recording
 - EmotiBit Oscilloscope 1.11.1+ with LSL Output enabled for physiological-data sessions
 - Virtual MIDI: the built-in IAC Driver on macOS, or
@@ -138,14 +138,14 @@ The report lists observed and missing event classes, confidence levels, and call
 ## Development
 
 ```sh
-python3.12 -m venv .venv
+python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 .venv/bin/python -m pytest
 .venv/bin/ruff check .
 .venv/bin/mypy src
 ```
 
-On Windows, replace `.venv/bin/` with `.venv\Scripts\` and use `py -3.12` when
+On Windows, replace `.venv/bin/` with `.venv\Scripts\` and use `py -3` when
 creating the environment.
 
 Build a standalone executable with `scripts/build-macos.sh` on macOS or

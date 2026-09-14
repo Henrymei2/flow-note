@@ -7,12 +7,18 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Python = Get-Command py -ErrorAction SilentlyContinue
 if (-not $Python) {
-    throw "Python 3.12 is required. Install it from python.org, then run this installer again."
+    throw "Python 3.12 or newer is required. Install it from python.org, then run this installer again."
 }
 
-& py -3.12 --version | Out-Host
+& py -3 -c "import sys; raise SystemExit(sys.version_info < (3, 12))"
+if ($LASTEXITCODE -ne 0) {
+    throw "The default Python 3 installation is too old. Python 3.12 or newer is required."
+}
+
+& py -3 --version | Out-Host
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-& py -3.12 -m venv "$InstallRoot\.venv"
+# Recreate the environment so stale interpreter links from an older Python cannot survive.
+& py -3 -m venv --clear "$InstallRoot\.venv"
 $VenvPython = "$InstallRoot\.venv\Scripts\python.exe"
 & $VenvPython -m pip install --upgrade pip
 & $VenvPython -m pip install --upgrade $RepoRoot

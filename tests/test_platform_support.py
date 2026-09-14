@@ -40,3 +40,15 @@ def test_installers_verify_observer_and_require_reload() -> None:
     assert "checksum" in macos.lower() and "reload Activity Recorder" in macos
     assert "checksum" in windows.lower() and "reload Activity Recorder" in windows
     assert "companion=" in macos and "companion=" in windows
+
+
+def test_installers_accept_supported_python_versions() -> None:
+    root = Path(__file__).parents[1]
+    macos = (root / "scripts" / "install-macos.sh").read_text(encoding="utf-8")
+    windows = (root / "scripts" / "install.ps1").read_text(encoding="utf-8")
+    assert "python3.12" not in macos
+    assert "py -3.12" not in windows
+    assert "sys.version_info < (3, 12)" in macos
+    assert "sys.version_info < (3, 12)" in windows
+    assert 'venv --clear "$INSTALL_ROOT/.venv"' in macos
+    assert 'venv --clear "$InstallRoot\\.venv"' in windows
