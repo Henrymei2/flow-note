@@ -352,7 +352,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/sessions/{session_id}/share")
     async def share_session(session_id: str) -> FileResponse:
-        """Download a complete, portable research archive for one finished session."""
+        """Download the available data for one finished session as a portable archive."""
         try:
             path = await asyncio.to_thread(research_archives.export, session_id)
         except KeyError as exc:
@@ -368,7 +368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/cloud-share", status_code=201)
     async def cloud_share_session(session_id: str) -> dict[str, Any]:
-        """Upload a complete session archive and return a temporary private link."""
+        """Upload a finished session's available data and return a temporary private link."""
         path: Path | None = None
         try:
             session = database.get_session(session_id)

@@ -43,16 +43,16 @@ class ResearchArchiveManager:
         if session["status"] == "recording":
             raise ResearchArchiveError("Stop the recording before sharing it")
         assets = self.database.list_assets(session_id)
-        streams = self.database.list_signal_streams(session_id)
+        streams = [
+            stream
+            for stream in self.database.list_signal_streams(session_id)
+            if int(stream.get("sample_count") or 0) > 0
+        ]
         events = self._all_events(session_id)
         video = next(
             (item for item in assets if item["kind"] == "video" and item["status"] == "ready"),
             None,
         )
-        if video is None or not video.get("relative_path"):
-            raise ResearchArchiveError("This session has no completed video to share")
-        if not streams or not any(int(stream.get("sample_count") or 0) for stream in streams):
-            raise ResearchArchiveError("This session has no physiological samples to share")
         handle, temporary_name = tempfile.mkstemp(
             prefix=f"research-session-{session_id}-", suffix=".zip", dir=self.root
         )
@@ -75,11 +75,12 @@ class ResearchArchiveManager:
                     content = self._signal_csv(session_id, str(stream["type_tag"]))
                     self._write_bytes(archive, path, content, checksums)
                     signal_entries.append({**self._portable_row(stream), "file": path})
-                source = self._contained_path(str(video["relative_path"]))
-                suffix = source.suffix if source.suffix else ".webm"
-                path = f"media/video{suffix}"
-                self._write_file(archive, path, source, checksums)
-                video_entry = {**self._portable_row(video), "file": path}
+                if video is not None and video.get("relative_path"):
+                    source = self._contained_path(str(video["relative_path"]))
+                    suffix = source.suffix if source.suffix else ".webm"
+                    path = f"media/video{suffix}"
+                    self._write_file(archive, path, source, checksums)
+                    video_entry = {**self._portable_row(video), "file": path}
                 self._write_bytes(archive, "README.txt", self._readme().encode(), checksums)
                 manifest = {
                     "format": FORMAT_NAME,
@@ -285,10 +286,10 @@ class ResearchArchiveManager:
             manifest.get("events"), dict
         ):
             raise ResearchArchiveError("Archive manifest is incomplete")
-        if not isinstance(manifest.get("video"), dict):
-            raise ResearchArchiveError("Archive does not contain a video")
-        if not isinstance(manifest.get("physiology"), list) or not manifest["physiology"]:
-            raise ResearchArchiveError("Archive does not contain physiological data")
+        if manifest.get("video") is not None and not isinstance(manifest.get("video"), dict):
+            raise ResearchArchiveError("Archive contains invalid video metadata")
+        if not isinstance(manifest.get("physiology"), list):
+            raise ResearchArchiveError("Archive contains invalid physiology metadata")
         checksums = manifest.get("checksums")
         if not isinstance(checksums, dict):
             raise ResearchArchiveError("Archive has no checksums")

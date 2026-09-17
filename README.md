@@ -165,10 +165,11 @@ and parameter labels are stored; project paths are not collected. See
 
 ## Sharing with researchers
 
-For a finished session with ready video and EmotiBit data, choose **Download archive** to save a
-versioned, checksummed ZIP containing WebM video, CSV physiological channels, and CSV/JSONL FL
-Studio events. When private Cloudflare R2 sharing is configured, **Upload to cloud** stores the
-same immutable archive in a shared catalog. Collaborators can refresh **Cloud sessions**, download
+For any finished or interrupted session, choose **Download archive** to save a versioned,
+checksummed ZIP containing the available WebM video, CSV physiological channels, and CSV/JSONL FL
+Studio events. Missing or incomplete sources remain identified by the session metadata rather than
+blocking recovery of the usable data. When private Cloudflare R2 sharing is configured, **Upload to
+cloud** stores the same immutable archive in a shared catalog. Collaborators can refresh **Cloud sessions**, download
 the ZIP, and restore it with **Import research archive** on their own recorder. See
 [data-sharing.md](docs/data-sharing.md) for R2 setup, the archive layout, timeline convention, and
 handling recommendations for human-subject data.

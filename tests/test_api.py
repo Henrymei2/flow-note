@@ -385,3 +385,52 @@ def test_complete_research_archive_round_trip(tmp_path: object) -> None:
         )
         assert invalid.status_code == 422
         assert len(client.get("/api/sessions").json()) == session_count
+
+
+def test_interrupted_session_without_video_or_signals_can_be_shared(tmp_path: object) -> None:
+    """Preserve and upload usable event data when optional recording sources are absent."""
+    settings = Settings(
+        database_path=tmp_path / "test.db",  # type: ignore[operator]
+        data_directory=tmp_path / "sessions",  # type: ignore[operator]
+        enable_midi=False,
+        r2_account_id="0123456789abcdef0123456789abcdef",
+        r2_bucket_name="research-sessions",
+        r2_access_key_id="test-access",
+        r2_secret_access_key="test-secret",
+        r2_endpoint=("https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com"),
+    )
+    app = create_app(settings)
+    fake_r2 = FakeR2Client()
+    app.state.r2._client = fake_r2
+    session = app.state.database.create_session(
+        project_title="Interrupted Session",
+        fl_version="26.1.2",
+        api_version=43,
+        recorder_version="test",
+    )
+    session_id = str(session["id"])
+    app.state.database.finish_session(session_id, "interrupted")
+
+    with TestClient(app) as client:
+        shared = client.get(f"/api/sessions/{session_id}/share")
+        assert shared.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(shared.content)) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            assert manifest["session"]["status"] == "interrupted"
+            assert manifest["video"] is None
+            assert manifest["physiology"] == []
+
+        cloud_shared = client.post(f"/api/sessions/{session_id}/cloud-share")
+        assert cloud_shared.status_code == 201
+        assert fake_r2.upload is not None
+
+        imported = client.post(
+            "/api/research-archives",
+            content=shared.content,
+            headers={"Content-Type": "application/zip"},
+        )
+        assert imported.status_code == 201
+        detail = client.get(f"/api/sessions/{imported.json()['id']}").json()
+        assert detail["status"] == "interrupted"
+        assert detail["video_status"] == "missing"
+        assert detail["emotibit_status"] == "missing"

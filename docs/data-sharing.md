@@ -1,8 +1,9 @@
 # Sharing research sessions
 
-Use **Download archive** on a finished session to download one portable ZIP. The recorder only
-enables a complete share when both the video and physiological recording are ready. The archive
-contains:
+Use **Download archive** on a finished or interrupted session to download one portable ZIP. The
+archive preserves every available source even when recording ended unexpectedly. Missing video or
+physiological data does not block export, and the manifest retains the source status. The archive
+can contain:
 
 - `media/video.webm`: the FL Studio window recording and any captured audio.
 - `physiology/*.csv`: one signal per file, with `timeline_seconds,value` columns.
@@ -26,7 +27,7 @@ permissions on macOS, and the dashboard never returns either credential to the b
 
 With R2 configured, **Upload to cloud**:
 
-1. Builds the same complete, checksummed research ZIP used by the local download.
+1. Builds the same checksummed research ZIP used by the local download, including all available sources.
 2. Uploads it under `sessions/<session-id>/<sha256>.zip`, making the object name content-addressed.
 3. Uses multipart upload for archives of 100 MB or more.
 4. Publishes a small metadata record under `catalog/<session-id>.json`.
