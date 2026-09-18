@@ -260,6 +260,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     code="audio_unavailable",
                     message="Chrome did not provide an audio track; video is silent",
                 )
+            else:
+                audio_settings = metadata.get("audio_settings")
+                channel_count = (
+                    audio_settings.get("channelCount")
+                    if isinstance(audio_settings, dict)
+                    else None
+                )
+                if channel_count != 2:
+                    verified_count = (
+                        channel_count if isinstance(channel_count, (int, float)) else None
+                    )
+                    database.add_diagnostic(
+                        session_id=session_id,
+                        level="warning",
+                        code=(
+                            "audio_not_stereo"
+                            if verified_count is not None
+                            else "audio_stereo_unverified"
+                        ),
+                        message=(
+                            f"Chrome provided {verified_count:g}-channel audio; "
+                            "stereo is recommended"
+                            if verified_count is not None
+                            else (
+                                "Chrome did not report the audio channel count; "
+                                "stereo is unverified"
+                            )
+                        ),
+                        payload={"channel_count": verified_count},
+                    )
             return captures.start(
                 session_id,
                 mime_type=str(payload.get("mime_type") or "video/webm"),

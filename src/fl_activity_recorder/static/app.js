@@ -143,6 +143,16 @@ async function synchronizeBrowserClock() {
 }
 function mediaType() { return ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"].find((type) => MediaRecorder.isTypeSupported(type)) || ""; }
 
+/** Return music-oriented constraints for the display-capture audio track. */
+function audioCaptureConstraints() {
+  return { channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+}
+
+/** Return MediaRecorder options that preserve more detail in stereo music. */
+function recorderOptions(type) {
+  return { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: 256000, audioBitrateMode: "variable" };
+}
+
 async function firstVideoFrame(stream) {
   const preview = document.createElement("video"); preview.muted = true; preview.playsInline = true; preview.srcObject = stream;
   try {
@@ -157,19 +167,23 @@ async function firstVideoFrame(stream) {
 
 async function startRecording() {
   $("capture-modal").hidden = false; let stream;
-  try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 }, displaySurface: "window" }, audio: true, systemAudio: "include", windowAudio: "window", selfBrowserSurface: "exclude" }); }
+  try { stream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 }, displaySurface: "window" }, audio: audioCaptureConstraints(), systemAudio: "include", windowAudio: "window", selfBrowserSurface: "exclude" }); }
   catch (error) { $("capture-modal").hidden = true; const session = await request("/api/sessions", { method: "POST" }); state.selected = session; toast("Session started without video"); await refreshAll(); return; }
-  $("capture-modal").hidden = true; const videoTrack = stream.getVideoTracks()[0]; const settings = videoTrack.getSettings();
-  if (settings.displaySurface !== "window") { stream.getTracks().forEach((track) => track.stop()); throw new Error("Select the FL Studio window, not an entire display or tab"); }
+  $("capture-modal").hidden = true; const videoTrack = stream.getVideoTracks()[0]; const videoSettings = videoTrack.getSettings(); const audioTrack = stream.getAudioTracks()[0] || null; const audioSettings = audioTrack ? audioTrack.getSettings() : null;
+  if (videoSettings.displaySurface !== "window") { stream.getTracks().forEach((track) => track.stop()); throw new Error("Select the FL Studio window, not an entire display or tab"); }
   let session = null; let recorder = null; let stopped = Promise.resolve(); let upload = Promise.resolve();
   try {
-    const sync = await synchronizeBrowserClock(); session = await request("/api/sessions", { method: "POST" }); state.selected = session; const type = mediaType(); recorder = new MediaRecorder(stream, type ? { mimeType: type } : {});
+    const sync = await synchronizeBrowserClock(); session = await request("/api/sessions", { method: "POST" }); state.selected = session; const type = mediaType(); recorder = new MediaRecorder(stream, recorderOptions(type));
     let sequence = 0; let stopping = false; const firstFrame = firstVideoFrame(stream);
     recorder.addEventListener("dataavailable", (event) => { if (event.data.size) upload = upload.then(() => fetch(`/api/sessions/${session.id}/capture/chunks/${sequence++}`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: event.data })).then((response) => { if (!response.ok) throw new Error("Video chunk upload failed"); }); });
     stopped = new Promise((resolve) => recorder.addEventListener("stop", resolve, { once: true })); recorder.start(1000); const startedPerformance = await firstFrame;
-    await request(`/api/sessions/${session.id}/capture/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mime_type: recorder.mimeType || "video/webm", started_lsl: startedPerformance / 1000 + sync.offset, clock_sync: sync, metadata: { ...settings, has_audio: stream.getAudioTracks().length > 0 } }) });
+    await request(`/api/sessions/${session.id}/capture/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mime_type: recorder.mimeType || "video/webm", started_lsl: startedPerformance / 1000 + sync.offset, clock_sync: sync, metadata: { ...videoSettings, has_audio: Boolean(audioTrack), audio_settings: audioSettings, audio_recorder: audioTrack ? { bits_per_second: recorder.audioBitsPerSecond, bitrate_mode: recorder.audioBitrateMode, mime_type: recorder.mimeType } : null } }) });
     videoTrack.addEventListener("ended", async () => { if (!stopping && state.capture) { toast("Window sharing ended; finalizing the partial video"); await stopRecording(); } });
-    state.capture = { recorder, stream, upload: () => upload, stopped, sync, startedPerformance, sessionId: session.id, markStopping: () => { stopping = true; } }; await refreshAll(); toast(stream.getAudioTracks().length ? "Recording started" : "Recording started without audio");
+    state.capture = { recorder, stream, upload: () => upload, stopped, sync, startedPerformance, sessionId: session.id, markStopping: () => { stopping = true; } }; await refreshAll();
+    if (!audioTrack) toast("Recording started without audio");
+    else if (audioSettings.channelCount === 2) toast("Recording started with stereo audio");
+    else if (audioSettings.channelCount) toast(`Recording started with ${audioSettings.channelCount}-channel audio; stereo is recommended`);
+    else toast("Recording started; Chrome did not report the audio channel count");
   } catch (error) {
     if (recorder?.state !== "inactive") recorder.stop(); await stopped; await upload.catch(() => null); stream.getTracks().forEach((track) => track.stop());
     if (session) { await request(`/api/sessions/${session.id}/capture/abort`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: error.message }) }).catch(() => null); await request(`/api/sessions/${session.id}/stop`, { method: "POST" }).catch(() => null); }
