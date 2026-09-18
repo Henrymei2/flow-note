@@ -64,6 +64,12 @@
         <div class="source-status" id="source-status"></div>
         <video id="session-video" controls preload="metadata" hidden></video>
         <div id="event-ruler" class="event-ruler" aria-label="FL Studio event markers"></div>
+        <label class="cluster-toggle" id="cluster-toggle-row" hidden>
+          <input type="checkbox" id="cluster-toggle" checked>
+          <span>Pattern suggestions</span>
+        </label>
+        <div id="cluster-ruler" class="cluster-ruler" aria-label="Bio signal pattern clusters" hidden></div>
+        <div id="cluster-legend" class="cluster-legend" aria-label="Pattern suggestion legend" hidden></div>
         <div class="playhead-controls">
           <span id="playhead-label">00:00.000</span>
           <input id="playhead" type="range" min="0" max="1" step="0.001" value="0">
@@ -96,6 +102,10 @@
       </div>
 
       <div class="timeline panel">
+        <div class="pattern-filter" id="pattern-filter" hidden>
+          <span id="pattern-filter-text"></span>
+          <button class="button secondary" id="pattern-filter-clear">Show all events</button>
+        </div>
         <div id="event-list"></div>
         <div class="timeline-empty" id="timeline-empty">
           <div class="empty-mark">♪</div>

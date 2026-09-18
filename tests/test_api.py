@@ -6,6 +6,7 @@ import json
 import time
 import zipfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 from fl_activity_recorder.api import create_app
@@ -434,3 +435,89 @@ def test_interrupted_session_without_video_or_signals_can_be_shared(tmp_path: ob
         assert detail["status"] == "interrupted"
         assert detail["video_status"] == "missing"
         assert detail["emotibit_status"] == "missing"
+
+
+def test_biosignal_clusters_group_distinct_windows(tmp_path: object) -> None:
+    """Windows with visibly different EDA/heart-rate levels land in different clusters."""
+    settings = Settings(
+        database_path=tmp_path / "test.db",  # type: ignore[operator]
+        data_directory=tmp_path / "sessions",  # type: ignore[operator]
+        enable_midi=False,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        recorder = app.state.recorder
+        recorder.ingest(
+            DecodedMessage(
+                MessageKind.HELLO,
+                1,
+                {
+                    "api_version": 45,
+                    "observer_version": OBSERVER_VERSION,
+                    "observer_schema": OBSERVER_SCHEMA,
+                    "observer_build": OBSERVER_BUILD,
+                },
+            )
+        )
+        make_emotibit_ready(app)
+        session = client.post("/api/sessions").json()
+        zero = float(session["timeline_zero_lsl"])
+
+        duration = 300.0
+        phase_boundary = 150.0
+        sample_period = 2.0
+        offsets = [t * sample_period + 0.5 for t in range(int(duration / sample_period))]
+        constant_tags = {"EA": (0.1, 0.9), "HR": (60.0, 100.0), "SA": (1.0, 5.0), "SR": (1.0, 5.0),
+                          "SF": (1.0, 5.0), "T1": (1.0, 5.0), "TH": (1.0, 5.0)}
+        motion_tags = ["AX", "AY", "AZ", "GX", "GY", "GZ", "MX", "MY", "MZ"]
+
+        for index, (tag, (low, high)) in enumerate(constant_tags.items()):
+            descriptor = SignalDescriptor(
+                track_id=tag, type_tag=tag, display_name=tag, group_name="test",
+                unit=None, nominal_rate=1 / sample_period, stream_name=f"EmotiBit-{tag}",
+                source_id="test", channel_index=index, channel_format="1",
+            )
+            values = [low if t < phase_boundary else high for t in offsets]
+            app.state.signals.append(descriptor, [zero + t for t in offsets], values)
+
+        # Motion channels differ in within-window *variability*, not level: a near-zero
+        # amplitude square wave before the boundary ("still"), a large one after ("moving").
+        for index, tag in enumerate(motion_tags):
+            descriptor = SignalDescriptor(
+                track_id=tag, type_tag=tag, display_name=tag, group_name="test",
+                unit=None, nominal_rate=1 / sample_period, stream_name=f"EmotiBit-{tag}",
+                source_id="test", channel_index=index, channel_format="1",
+            )
+            values = [
+                (0.02 if t < phase_boundary else 3.0) * (1 if i % 2 == 0 else -1)
+                for i, t in enumerate(offsets)
+            ]
+            app.state.signals.append(descriptor, [zero + t for t in offsets], values)
+
+        recorder.stop_session(session["id"], timeline_end_lsl=zero + duration)
+
+        response = client.get(f"/api/sessions/{session['id']}/biosignal-clusters")
+        assert response.status_code == 200
+        body = response.json()
+        # Auto-sizing targets ~28 windows over the session, clamped to [6, 30]s.
+        assert body["window_seconds"] == duration / 28
+
+        regions = body["windows"]
+        assert regions == sorted(regions, key=lambda w: w["start_seconds"])
+        # Consecutive same-cluster windows are merged, so the raw windows collapse
+        # into a handful of regions rather than being returned one by one.
+        assert 2 <= len(regions) < 15
+        assert regions[0]["cluster"] != regions[-1]["cluster"]
+        assert regions[0]["start_seconds"] == 0.0
+        assert regions[-1]["end_seconds"] == pytest.approx(duration)
+
+        assert body["clusters"]
+        for cluster in body["clusters"]:
+            assert isinstance(cluster["label"], str) and cluster["label"]
+            assert set(cluster["centroid"]) == {
+                "EA_mean", "EA_std", "HR_mean", "HR_std", "SA_mean", "SR_mean",
+                "SF_mean", "T1_mean", "TH_mean", "movement_energy", "rotation_energy",
+                "magnetic_energy",
+            }
+
+        assert client.get("/api/sessions/does-not-exist/biosignal-clusters").status_code == 404

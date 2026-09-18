@@ -1,4 +1,4 @@
-const state = { health: null, sharing: null, sessions: [], cloudSessions: [], selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [] };
+const state = { health: null, sharing: null, sessions: [], cloudSessions: [], selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clustersVisible: true, patternFilter: null };
 const $ = (id) => document.getElementById(id);
 
 async function request(url, options = {}) {
@@ -66,8 +66,14 @@ function renderSelected() {
 }
 
 function renderEvents() {
-  const list = $("event-list"); list.replaceChildren(); $("timeline-empty").hidden = state.events.length > 0;
-  for (const event of state.events) {
+  const filter = state.patternFilter;
+  const filterBar = $("pattern-filter"); filterBar.hidden = !filter;
+  const events = filter
+    ? state.events.filter((event) => event.timeline_seconds != null && event.timeline_seconds >= filter.start && event.timeline_seconds < filter.end)
+    : state.events;
+  if (filter) $("pattern-filter-text").textContent = `${events.length} event(s) during: ${filter.label} (${formatTime(filter.start)}–${formatTime(filter.end)})`;
+  const list = $("event-list"); list.replaceChildren(); $("timeline-empty").hidden = events.length > 0;
+  for (const event of events) {
     const row = document.createElement("article"); row.className = "event";
     const time = document.createElement("time"); time.className = "event-time"; time.textContent = event.timeline_seconds == null ? new Date(event.occurred_at).toLocaleTimeString() : formatTime(event.timeline_seconds);
     const dot = document.createElement("div"); dot.className = "event-dot";
@@ -114,15 +120,83 @@ function renderLiveSignals() {
 
 function drawSignals() {
   const box = $("signal-tracks"); box.replaceChildren(); if (!state.timeline) return;
+  const span = state.timeline.end - state.timeline.start;
   for (const signal of state.timeline.signals) {
     const stream = state.detail.signals.find((item) => item.type_tag === signal.type_tag); const row = document.createElement("div"); row.className = "signal-track";
     const label = document.createElement("span"); label.textContent = stream?.display_name || signal.type_tag; const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 72;
     drawSignal(canvas, signal); const seekFromPointer = (event) => { const rect = canvas.getBoundingClientRect(); seekTimeline(state.timeline.start + (event.clientX - rect.left) / rect.width * (state.timeline.end - state.timeline.start)); }; canvas.addEventListener("click", seekFromPointer); canvas.addEventListener("mousemove", seekFromPointer);
     row.append(label, canvas); box.append(row);
   }
-  const ruler = $("event-ruler"); ruler.replaceChildren(); const span = state.timeline.end - state.timeline.start;
+  const ruler = $("event-ruler"); ruler.replaceChildren();
   for (const event of state.timeline.events) { const marker = document.createElement("button"); marker.className = "event-marker"; marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`; marker.title = `${formatTime(event.timeline_seconds)} · ${event.summary}`; marker.addEventListener("click", () => seekTimeline(event.timeline_seconds)); ruler.append(marker); }
+  drawClusters(span);
 }
+
+function clusterLabel(id) { return state.clusterLegend.find((item) => item.id === id)?.label || `pattern ${id + 1}`; }
+
+// Cluster ids come back ranked calm(0) -> activated(last) from the backend, so
+// a fixed cool -> warm gradient means the same thing on every session: no
+// legend-memorizing required to tell "calmer" from "activated" at a glance.
+const CLUSTER_GRADIENT = [
+  [0.00, [79, 158, 234]], // calm blue
+  [0.30, [83, 211, 147]], // green
+  [0.55, [232, 197, 71]], // yellow
+  [0.75, [255, 157, 66]], // orange
+  [1.00, [255, 93, 108]], // activated red
+];
+function clusterColor(rank, total) {
+  const t = total <= 1 ? 0 : rank / (total - 1);
+  for (let i = 0; i < CLUSTER_GRADIENT.length - 1; i++) {
+    const [t0, c0] = CLUSTER_GRADIENT[i]; const [t1, c1] = CLUSTER_GRADIENT[i + 1];
+    if (t <= t1 || i === CLUSTER_GRADIENT.length - 2) {
+      const localT = Math.min(1, Math.max(0, t1 === t0 ? 0 : (t - t0) / (t1 - t0)));
+      const mix = (a, b) => Math.round(a + (b - a) * localT);
+      return `rgb(${mix(c0[0], c1[0])}, ${mix(c0[1], c1[1])}, ${mix(c0[2], c1[2])})`;
+    }
+  }
+  return "rgb(255, 93, 108)";
+}
+
+function drawClusters(span) {
+  const toggleRow = $("cluster-toggle-row"); const ruler = $("cluster-ruler");
+  toggleRow.hidden = state.clusters.length === 0; ruler.replaceChildren();
+  if (!state.clustersVisible) { ruler.hidden = true; renderClusterLegend(); return; }
+  const visible = state.clusters.filter((window) => window.end_seconds > state.timeline.start && window.start_seconds < state.timeline.end);
+  ruler.hidden = visible.length === 0;
+  const total = state.clusterLegend.length;
+  for (const window of visible) {
+    const start = Math.max(window.start_seconds, state.timeline.start); const end = Math.min(window.end_seconds, state.timeline.end);
+    const segment = document.createElement("button"); segment.className = "cluster-segment";
+    segment.style.left = `${(start - state.timeline.start) / span * 100}%`; segment.style.width = `${Math.max(0, (end - start) / span * 100)}%`;
+    segment.style.background = clusterColor(window.cluster, total);
+    segment.title = `${formatTime(window.start_seconds)}–${formatTime(window.end_seconds)} · ${clusterLabel(window.cluster)}`;
+    segment.addEventListener("click", () => applyPatternFilter(window));
+    ruler.append(segment);
+  }
+  renderClusterLegend();
+}
+
+function renderClusterLegend() {
+  const legend = $("cluster-legend"); legend.replaceChildren();
+  const used = new Set(state.clusters.map((window) => window.cluster));
+  const entries = state.clustersVisible ? state.clusterLegend.filter((item) => used.has(item.id)) : [];
+  legend.hidden = entries.length === 0;
+  const total = state.clusterLegend.length;
+  for (const item of entries) {
+    const chip = document.createElement("span"); chip.className = "cluster-chip";
+    const dot = document.createElement("i"); dot.style.background = clusterColor(item.id, total);
+    chip.append(dot, document.createTextNode(item.label)); legend.append(chip);
+  }
+}
+
+function applyPatternFilter(window) {
+  seekTimeline((window.start_seconds + window.end_seconds) / 2);
+  state.patternFilter = { start: window.start_seconds, end: window.end_seconds, label: clusterLabel(window.cluster) };
+  renderEvents();
+}
+
+$("cluster-toggle").addEventListener("change", (event) => { state.clustersVisible = event.target.checked; drawSignals(); });
+$("pattern-filter-clear").addEventListener("click", () => { state.patternFilter = null; renderEvents(); });
 
 function drawSignal(canvas, signal) {
   const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return; const values = points.flatMap((point) => point.slice(1));
@@ -199,7 +273,15 @@ async function loadHealth() { state.health = await request("/api/health"); rende
 async function loadSharing() { state.sharing = await request("/api/sharing"); renderSelected(); }
 async function loadCloudSessions() { if (!state.sharing?.configured) { state.cloudSessions = []; renderCloudSessions(); return; } try { state.cloudSessions = await request("/api/cloud-sessions"); renderCloudSessions(); } catch (error) { state.cloudSessions = []; renderCloudSessions(error.message); } }
 async function loadSessions() { state.sessions = await request("/api/sessions"); if (state.selected) state.selected = state.sessions.find((item) => item.id === state.selected.id) || null; renderSessions(); renderSelected(); }
-async function selectSession(session) { state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); renderSessions(); renderSelected(); await Promise.all([loadCategories(), loadEvents()]); }
+async function selectSession(session) { state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.patternFilter = null; renderSessions(); renderSelected(); await Promise.all([loadCategories(), loadEvents(), loadBiosignalClusters()]); drawSignals(); }
+
+async function loadBiosignalClusters() {
+  if (!state.detail || state.detail.status === "recording") { state.clusters = []; state.clusterLegend = []; return; }
+  try {
+    const result = await request(`/api/sessions/${state.detail.id}/biosignal-clusters`);
+    state.clusters = result.windows; state.clusterLegend = result.clusters;
+  } catch { state.clusters = []; state.clusterLegend = []; }
+}
 async function loadCategories() { const select = $("category"), selected = select.value; const categories = state.selected ? await request(`/api/sessions/${state.selected.id}/categories`) : []; select.replaceChildren(new Option("All activity", "")); categories.forEach((value) => select.append(new Option(value, value))); select.value = categories.includes(selected) ? selected : ""; }
 async function loadEvents() { if (!state.selected) return; const params = new URLSearchParams(); if ($("category").value) params.set("category", $("category").value); if ($("confidence").value) params.set("confidence", $("confidence").value); if ($("search").value) params.set("search", $("search").value); state.events = await request(`/api/sessions/${state.selected.id}/events?${params}`); renderEvents(); }
 async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions()]); await loadCloudSessions(); if (state.selected) await selectSession(state.selected); }
