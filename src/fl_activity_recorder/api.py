@@ -23,6 +23,7 @@ from starlette.background import BackgroundTask
 
 from . import __version__
 from .assets import CaptureManager
+from .biosignal_clustering import compute_biosignal_clusters
 from .config import Settings
 from .database import Database
 from .live_signals import EmotiBitLslReceiver, LiveSignalStore
@@ -232,6 +233,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "signals": signals,
             "duration_seconds": _session_duration(session),
         }
+
+    @app.get("/api/sessions/{session_id}/biosignal-clusters")
+    async def biosignal_clusters(
+        session_id: str,
+        window_seconds: float | None = Query(default=None, ge=5.0, le=120.0),
+        clusters: int = Query(default=3, ge=2, le=6),
+    ) -> dict[str, Any]:
+        """Group physiological windows into labeled pattern-suggestion regions.
+
+        `window_seconds` is auto-sized from the session length when omitted, so
+        the caller only needs to override it for a manual sensitivity tweak.
+        """
+        try:
+            session = database.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        return await asyncio.to_thread(
+            compute_biosignal_clusters,
+            app.state.signals,
+            session_id,
+            _session_duration(session),
+            window_seconds=window_seconds,
+            n_clusters=clusters,
+        )
 
     @app.post("/api/sessions/{session_id}/capture/start")
     async def start_capture(session_id: str, request: Request) -> dict[str, Any]:

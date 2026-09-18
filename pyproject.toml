@@ -17,6 +17,7 @@ dependencies = [
   "pylsl>=1.17,<2",
   "python-dotenv>=1.1,<2",
   "python-rtmidi>=1.5,<2",
+  "scikit-learn>=1.5,<2",
   "uvicorn>=0.35,<1",
 ]
 
