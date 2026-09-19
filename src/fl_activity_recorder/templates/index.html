@@ -38,6 +38,17 @@
       <div id="session-list" class="session-list"></div>
       <p class="empty muted" id="sessions-empty">No recordings yet.</p>
 
+      <div class="section-heading bookmark-heading">
+        <h2>Bookmarks</h2>
+        <span class="count" id="bookmark-count">0</span>
+      </div>
+      <input id="bookmark-search" type="search" placeholder="Search notes, labels, projects">
+      <select id="bookmark-label-filter" aria-label="Filter bookmarks by label">
+        <option value="">All labels</option>
+      </select>
+      <div id="bookmark-list" class="bookmark-list"></div>
+      <p class="empty muted" id="bookmarks-empty">Select an interval to start your notebook.</p>
+
       <div class="section-heading cloud-heading">
         <h2>Cloud sessions</h2>
       </div>
@@ -62,6 +73,7 @@
 
       <div class="review panel" id="review-panel" hidden>
         <div class="source-status" id="source-status"></div>
+        <p class="selection-help" id="selection-help">Drag across the event ruler or a physiological trace to select an interval.</p>
         <video id="session-video" controls preload="metadata" hidden></video>
         <div id="event-ruler" class="event-ruler" aria-label="FL Studio event markers"></div>
         <label class="cluster-toggle" id="cluster-toggle-row" hidden>
@@ -77,6 +89,27 @@
         </div>
         <div id="track-picker" class="track-picker"></div>
         <div id="signal-tracks" class="signal-tracks"></div>
+        <form class="annotation-composer" id="annotation-composer" hidden>
+          <div class="annotation-heading">
+            <div>
+              <p class="eyebrow" id="annotation-origin">MANUAL INTERVAL</p>
+              <h3 id="annotation-title">Annotate this moment</h3>
+              <p class="muted" id="annotation-context"></p>
+            </div>
+            <button class="icon-button" id="annotation-cancel" type="button" aria-label="Cancel annotation">×</button>
+          </div>
+          <div class="interval-fields">
+            <label><span>Start (seconds)</span><input id="annotation-start" type="number" min="0" step="0.001" required></label>
+            <label><span>End (seconds)</span><input id="annotation-end" type="number" min="0" step="0.001" required></label>
+          </div>
+          <label><span>Labels</span><input id="annotation-labels" type="text" list="bookmark-label-options" placeholder="e.g. overthinking, transition"></label>
+          <datalist id="bookmark-label-options"></datalist>
+          <label><span>Written note</span><textarea id="annotation-note" rows="4" required placeholder="What was happening, and how do you interpret it?"></textarea></label>
+          <div class="summary-actions">
+            <button class="button" id="annotation-save" type="submit">Save bookmark</button>
+            <button class="button danger" id="annotation-delete" type="button" hidden>Delete bookmark</button>
+          </div>
+        </form>
       </div>
 
       <div class="filters panel">

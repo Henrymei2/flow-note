@@ -1,4 +1,4 @@
-const state = { health: null, sharing: null, sessions: [], cloudSessions: [], selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clustersVisible: true, patternFilter: null };
+const state = { health: null, sharing: null, sessions: [], cloudSessions: [], bookmarks: [], bookmarkLabels: [], selectedBookmark: null, selectedInterval: null, focusWindow: null, selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clusterMeta: null, clustersVisible: true, patternFilter: null };
 const $ = (id) => document.getElementById(id);
 
 async function request(url, options = {}) {
@@ -35,9 +35,30 @@ function renderSessions() {
   for (const session of state.sessions) {
     const button = document.createElement("button"); button.className = `session-item ${state.selected?.id === session.id ? "active" : ""}`;
     const title = document.createElement("strong"); title.textContent = session.project_title || "Untitled project";
-    const detail = document.createElement("span"); detail.textContent = `${formatDate(session.started_at)} · ${session.event_count} events`;
+    const detail = document.createElement("span"); detail.textContent = `${formatDate(session.started_at)} · ${session.event_count} events · ${session.bookmark_count || 0} bookmarks`;
     button.append(title, detail); button.addEventListener("click", () => selectSession(session)); list.append(button);
   }
+}
+
+function renderBookmarks() {
+  const list = $("bookmark-list"); list.replaceChildren(); $("bookmark-count").textContent = state.bookmarks.length;
+  $("bookmarks-empty").hidden = state.bookmarks.length > 0;
+  $("bookmarks-empty").textContent = ($("bookmark-search").value || $("bookmark-label-filter").value) ? "No bookmarks match these filters." : "Select an interval to start your notebook.";
+  for (const bookmark of state.bookmarks) {
+    const button = document.createElement("button"); button.className = `bookmark-card ${state.selectedBookmark?.id === bookmark.id ? "active" : ""}`;
+    const note = document.createElement("strong"); note.textContent = bookmark.note;
+    const detail = document.createElement("small"); detail.textContent = `${bookmark.source_type === "pattern" ? "Pattern · " : ""}${bookmark.project_title || "Untitled project"} · ${formatTime(bookmark.start_seconds)}–${formatTime(bookmark.end_seconds)}`;
+    const tags = document.createElement("div"); tags.className = "bookmark-tags";
+    bookmark.labels.forEach((label) => { const tag = document.createElement("span"); tag.textContent = label; tags.append(tag); });
+    button.append(note, detail, tags); button.addEventListener("click", () => openBookmark(bookmark)); list.append(button);
+  }
+}
+
+function renderBookmarkLabels() {
+  const filter = $("bookmark-label-filter"); const selected = filter.value; filter.replaceChildren(new Option("All labels", ""));
+  const options = $("bookmark-label-options"); options.replaceChildren();
+  for (const item of state.bookmarkLabels) { filter.append(new Option(`${item.label} (${item.count})`, item.label)); options.append(new Option(item.label)); }
+  filter.value = state.bookmarkLabels.some((item) => item.label === selected) ? selected : "";
 }
 
 function renderCloudSessions(message = "") {
@@ -97,8 +118,10 @@ function renderTrackPicker() {
 
 function selectedTracks() { return [...$("track-picker").querySelectorAll("input:checked")].map((input) => input.value); }
 async function loadTimeline() {
-  if (!state.detail || state.detail.status === "recording") return; const duration = Math.max(1, sessionDuration(state.detail)); const zoom = Number($("zoom").value || 1); const width = duration / zoom;
-  const start = Math.max(0, Math.min(duration - width, state.currentTime - width / 2)); const params = new URLSearchParams({ start, end: Math.min(duration, start + width), pixels: 1200, tracks: selectedTracks().join(",") });
+  if (!state.detail || state.detail.status === "recording") return; const duration = Math.max(1, sessionDuration(state.detail)); let start; let end;
+  if (state.focusWindow) { start = state.focusWindow.start; end = state.focusWindow.end; }
+  else { const zoom = Number($("zoom").value || 1); const width = duration / zoom; start = Math.max(0, Math.min(duration - width, state.currentTime - width / 2)); end = Math.min(duration, start + width); }
+  const params = new URLSearchParams({ start, end, pixels: 1200, tracks: selectedTracks().join(",") });
   state.timeline = await request(`/api/sessions/${state.detail.id}/timeline?${params}`); drawSignals();
 }
 
@@ -124,11 +147,13 @@ function drawSignals() {
   for (const signal of state.timeline.signals) {
     const stream = state.detail.signals.find((item) => item.type_tag === signal.type_tag); const row = document.createElement("div"); row.className = "signal-track";
     const label = document.createElement("span"); label.textContent = stream?.display_name || signal.type_tag; const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 72;
-    drawSignal(canvas, signal); const seekFromPointer = (event) => { const rect = canvas.getBoundingClientRect(); seekTimeline(state.timeline.start + (event.clientX - rect.left) / rect.width * (state.timeline.end - state.timeline.start)); }; canvas.addEventListener("click", seekFromPointer); canvas.addEventListener("mousemove", seekFromPointer);
+    drawSignal(canvas, signal); enableIntervalDrag(canvas);
     row.append(label, canvas); box.append(row);
   }
   const ruler = $("event-ruler"); ruler.replaceChildren();
-  for (const event of state.timeline.events) { const marker = document.createElement("button"); marker.className = "event-marker"; marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`; marker.title = `${formatTime(event.timeline_seconds)} · ${event.summary}`; marker.addEventListener("click", () => seekTimeline(event.timeline_seconds)); ruler.append(marker); }
+  drawIntervalOverlay(ruler);
+  for (const event of state.timeline.events) { const marker = document.createElement("button"); marker.className = "event-marker"; marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`; marker.title = `${formatTime(event.timeline_seconds)} · ${event.summary}`; marker.addEventListener("click", (event_) => { event_.stopPropagation(); seekTimeline(event.timeline_seconds); }); ruler.append(marker); }
+  enableIntervalDrag(ruler);
   drawClusters(span);
 }
 
@@ -190,19 +215,90 @@ function renderClusterLegend() {
 }
 
 function applyPatternFilter(window) {
-  seekTimeline((window.start_seconds + window.end_seconds) / 2);
-  state.patternFilter = { start: window.start_seconds, end: window.end_seconds, label: clusterLabel(window.cluster) };
-  renderEvents();
+  selectInterval({
+    start: window.start_seconds,
+    end: window.end_seconds,
+    sourceType: "pattern",
+    label: clusterLabel(window.cluster),
+    patternContext: { label: clusterLabel(window.cluster), cluster_id: window.cluster, window_seconds: state.clusterMeta?.window_seconds, cluster_count: state.clusterLegend.length, algorithm_version: state.clusterMeta?.algorithm_version },
+  });
 }
 
 $("cluster-toggle").addEventListener("change", (event) => { state.clustersVisible = event.target.checked; drawSignals(); });
-$("pattern-filter-clear").addEventListener("click", () => { state.patternFilter = null; renderEvents(); });
+$("pattern-filter-clear").addEventListener("click", clearIntervalSelection);
 
 function drawSignal(canvas, signal) {
-  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return; const values = points.flatMap((point) => point.slice(1));
+  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) { drawCanvasInterval(ctx, canvas); return; } const values = points.flatMap((point) => point.slice(1));
   const min = Math.min(...values), max = Math.max(...values), span = max - min || 1; const x = (time) => (time - state.timeline.start) / (state.timeline.end - state.timeline.start) * canvas.width; const y = (value) => canvas.height - 4 - (value - min) / span * (canvas.height - 8);
   ctx.strokeStyle = "#ff7a1a"; ctx.lineWidth = 1; ctx.beginPath();
   if (signal.mode === "raw") points.forEach((point, index) => index ? ctx.lineTo(x(point[0]), y(point[1])) : ctx.moveTo(x(point[0]), y(point[1]))); else points.forEach((point) => { ctx.moveTo(x(point[0]), y(point[1])); ctx.lineTo(x(point[0]), y(point[2])); }); ctx.stroke();
+  drawCanvasInterval(ctx, canvas);
+}
+
+function drawCanvasInterval(ctx, canvas) {
+  if (!state.selectedInterval || !state.timeline) return;
+  const start = Math.max(state.selectedInterval.start, state.timeline.start); const end = Math.min(state.selectedInterval.end, state.timeline.end);
+  if (end <= start) return; const span = state.timeline.end - state.timeline.start;
+  const x = (start - state.timeline.start) / span * canvas.width; const width = (end - start) / span * canvas.width;
+  ctx.fillStyle = "rgba(105,168,255,.2)"; ctx.fillRect(x, 0, width, canvas.height); ctx.strokeStyle = "#69a8ff"; ctx.strokeRect(x, 0, width, canvas.height);
+}
+
+function drawIntervalOverlay(container) {
+  if (!state.selectedInterval || !state.timeline) return;
+  const start = Math.max(state.selectedInterval.start, state.timeline.start); const end = Math.min(state.selectedInterval.end, state.timeline.end);
+  if (end <= start) return; const span = state.timeline.end - state.timeline.start; const overlay = document.createElement("div"); overlay.className = "interval-overlay";
+  overlay.style.left = `${(start - state.timeline.start) / span * 100}%`; overlay.style.width = `${(end - start) / span * 100}%`; container.append(overlay);
+}
+
+function pointerTime(event, element) { const rect = element.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); return state.timeline.start + ratio * (state.timeline.end - state.timeline.start); }
+function enableIntervalDrag(element) {
+  let anchor = null;
+  element.addEventListener("pointerdown", (event) => { if (!state.detail || state.detail.status === "recording") return; anchor = pointerTime(event, element); element.setPointerCapture?.(event.pointerId); });
+  element.addEventListener("pointerup", (event) => { if (anchor == null) return; const current = pointerTime(event, element); const start = Math.min(anchor, current); const end = Math.max(anchor, current); anchor = null; if (end - start < 0.05) { seekTimeline(current); return; } selectInterval({ start, end, sourceType: "manual", label: "Manual selection", patternContext: null }); });
+}
+
+function selectInterval(interval, bookmark = null) {
+  const duration = sessionDuration(state.detail); const start = Math.max(0, Math.min(duration, Number(interval.start))); const end = Math.max(start, Math.min(duration, Number(interval.end)));
+  if (end - start < 0.001) return; state.selectedInterval = { ...interval, start, end }; state.selectedBookmark = bookmark; state.patternFilter = { start, end, label: interval.label || "Selected interval" };
+  const padding = Math.max(1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); renderEvents(); loadTimeline(); renderBookmarks();
+}
+
+function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.patternFilter = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderEvents(); renderBookmarks(); loadTimeline(); }
+
+function renderComposer(bookmark = null) {
+  const interval = state.selectedInterval; if (!interval) { $("annotation-composer").hidden = true; return; }
+  $("annotation-composer").hidden = false; $("annotation-origin").textContent = interval.sourceType === "pattern" ? "PATTERN SUGGESTION" : "MANUAL INTERVAL";
+  $("annotation-title").textContent = bookmark ? "Edit bookmark" : "Annotate this moment";
+  $("annotation-context").textContent = `${interval.label || "Selected interval"} · ${formatTime(interval.start)}–${formatTime(interval.end)}`;
+  $("annotation-start").value = interval.start.toFixed(3); $("annotation-end").value = interval.end.toFixed(3);
+  $("annotation-start").disabled = Boolean(bookmark); $("annotation-end").disabled = Boolean(bookmark);
+  $("annotation-note").value = bookmark?.note || ""; $("annotation-labels").value = bookmark?.labels.join(", ") || "";
+  $("annotation-save").textContent = bookmark ? "Save changes" : "Save bookmark"; $("annotation-delete").hidden = !bookmark;
+}
+
+function labelsFromInput() { return $("annotation-labels").value.split(",").map((item) => item.trim()).filter(Boolean); }
+
+async function saveAnnotation(event) {
+  event.preventDefault(); if (!state.detail || !state.selectedInterval) return;
+  const note = $("annotation-note").value; const labels = labelsFromInput();
+  try {
+    if (state.selectedBookmark) {
+      const updated = await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, labels }) }); state.selectedBookmark = updated; state.selectedInterval.label = updated.pattern_context?.label || "Saved bookmark"; toast("Bookmark updated");
+    } else {
+      const interval = state.selectedInterval; const created = await request("/api/bookmarks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: state.detail.id, start_seconds: Number($("annotation-start").value), end_seconds: Number($("annotation-end").value), note, labels, source_type: interval.sourceType, pattern_context: interval.patternContext }) }); state.selectedBookmark = created; state.selectedInterval.start = created.start_seconds; state.selectedInterval.end = created.end_seconds; toast("Bookmark saved");
+    }
+    await Promise.all([loadBookmarks(), loadBookmarkLabels(), loadSessions()]); renderComposer(state.selectedBookmark);
+  } catch (error) { toast(error.message); }
+}
+
+async function deleteSelectedBookmark() {
+  if (!state.selectedBookmark || !confirm("Delete this bookmark? The session recording will remain.")) return;
+  try { await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "DELETE" }); clearIntervalSelection(); await Promise.all([loadBookmarks(), loadBookmarkLabels(), loadSessions()]); toast("Bookmark deleted"); } catch (error) { toast(error.message); }
+}
+
+async function openBookmark(bookmark) {
+  const session = state.sessions.find((item) => item.id === bookmark.session_id); if (!session) { toast("The source session is no longer available"); return; }
+  await selectSession(session); selectInterval({ start: bookmark.start_seconds, end: bookmark.end_seconds, sourceType: bookmark.source_type, label: bookmark.pattern_context?.label || "Saved bookmark", patternContext: bookmark.pattern_context }, bookmark);
 }
 
 function seekTimeline(seconds) {
@@ -287,21 +383,26 @@ async function loadHealth() { state.health = await request("/api/health"); rende
 async function loadSharing() { state.sharing = await request("/api/sharing"); renderSelected(); }
 async function loadCloudSessions() { if (!state.sharing?.configured) { state.cloudSessions = []; renderCloudSessions(); return; } try { state.cloudSessions = await request("/api/cloud-sessions"); renderCloudSessions(); } catch (error) { state.cloudSessions = []; renderCloudSessions(error.message); } }
 async function loadSessions() { state.sessions = await request("/api/sessions"); if (state.selected) state.selected = state.sessions.find((item) => item.id === state.selected.id) || null; renderSessions(); renderSelected(); }
-async function selectSession(session) { state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.patternFilter = null; renderSessions(); renderSelected(); await Promise.all([loadCategories(), loadEvents(), loadBiosignalClusters()]); drawSignals(); }
+async function loadBookmarks() { const params = new URLSearchParams(); if ($("bookmark-search").value) params.set("search", $("bookmark-search").value); if ($("bookmark-label-filter").value) params.set("label", $("bookmark-label-filter").value); state.bookmarks = await request(`/api/bookmarks?${params}`); renderBookmarks(); }
+async function loadBookmarkLabels() { state.bookmarkLabels = await request("/api/bookmark-labels"); renderBookmarkLabels(); }
+async function selectSession(session) { state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.clusterMeta = null; state.patternFilter = null; state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderSessions(); renderBookmarks(); renderSelected(); await Promise.all([loadCategories(), loadEvents(), loadBiosignalClusters()]); drawSignals(); }
 
 async function loadBiosignalClusters() {
   if (!state.detail || state.detail.status === "recording") { state.clusters = []; state.clusterLegend = []; return; }
   try {
     const result = await request(`/api/sessions/${state.detail.id}/biosignal-clusters`);
-    state.clusters = result.windows; state.clusterLegend = result.clusters;
-  } catch { state.clusters = []; state.clusterLegend = []; }
+    state.clusters = result.windows; state.clusterLegend = result.clusters; state.clusterMeta = { algorithm_version: result.algorithm_version, window_seconds: result.window_seconds };
+  } catch { state.clusters = []; state.clusterLegend = []; state.clusterMeta = null; }
 }
 async function loadCategories() { const select = $("category"), selected = select.value; const categories = state.selected ? await request(`/api/sessions/${state.selected.id}/categories`) : []; select.replaceChildren(new Option("All activity", "")); categories.forEach((value) => select.append(new Option(value, value))); select.value = categories.includes(selected) ? selected : ""; }
 async function loadEvents() { if (!state.selected) return; const params = new URLSearchParams(); if ($("category").value) params.set("category", $("category").value); if ($("confidence").value) params.set("confidence", $("confidence").value); if ($("search").value) params.set("search", $("search").value); state.events = await request(`/api/sessions/${state.selected.id}/events?${params}`); renderEvents(); }
-async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions()]); await loadCloudSessions(); if (state.selected) await selectSession(state.selected); }
+async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]); await Promise.all([loadCloudSessions(), loadBookmarks()]); if (state.selected) await selectSession(state.selected); }
 
 $("record-button").addEventListener("click", async () => { try { state.health?.active_session_id ? await stopRecording() : await startRecording(); } catch (error) { toast(error.message); } });
 $("refresh-sessions").addEventListener("click", refreshAll);
+$("annotation-composer").addEventListener("submit", saveAnnotation); $("annotation-cancel").addEventListener("click", clearIntervalSelection); $("annotation-delete").addEventListener("click", deleteSelectedBookmark);
+for (const id of ["annotation-start", "annotation-end"]) $(id).addEventListener("change", () => { if (!state.selectedInterval || state.selectedBookmark) return; const start = Number($("annotation-start").value), end = Number($("annotation-end").value); if (Number.isFinite(start) && Number.isFinite(end) && end > start) selectInterval({ ...state.selectedInterval, start, end }); });
+let bookmarkSearchTimer; $("bookmark-search").addEventListener("input", () => { clearTimeout(bookmarkSearchTimer); bookmarkSearchTimer = setTimeout(loadBookmarks, 250); }); $("bookmark-label-filter").addEventListener("change", loadBookmarks);
 $("import-button").addEventListener("click", () => $("import-file").click());
 $("import-file").addEventListener("change", async (event) => {
   const file = event.target.files[0]; if (!file) return;
@@ -318,9 +419,9 @@ $("cloud-share-button").addEventListener("click", async () => {
 });
 $("copy-share-link").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("share-link").value); toast("Private link copied"); } catch { $("share-link").select(); toast("Select and copy the link"); } });
 $("close-share-modal").addEventListener("click", () => { $("share-modal").hidden = true; });
-$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; renderEvents(); renderSelected(); await loadSessions(); toast("Session deleted"); });
+$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderEvents(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); toast("Session deleted"); });
 for (const id of ["category", "confidence"]) $(id).addEventListener("change", loadEvents);
 let searchTimer; $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadEvents, 250); });
-$("playhead").addEventListener("input", (event) => seekTimeline(event.target.value)); $("zoom").addEventListener("change", loadTimeline); $("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
+$("playhead").addEventListener("input", (event) => seekTimeline(event.target.value)); $("zoom").addEventListener("change", () => { state.focusWindow = null; loadTimeline(); }); $("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
 const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = { ...state.health, ...item.health }; renderHealth(); } if (item.type === "emotibit_status") { state.health = { ...state.health, emotibit: item.emotibit }; state.liveDescriptors = item.emotibit.streams || []; renderHealth(); if (state.detail?.status === "recording") renderTrackPicker(); } if (["session_started", "session_stopped"].includes(item.type)) await refreshAll(); if (item.type === "emotibit_samples") appendLiveSamples(item); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); renderEvents(); if (state.detail?.status === "recording") renderLiveSignals(); } }; live.onerror = () => $("connection").classList.remove("connected");
-Promise.all([loadHealth(), loadSharing(), loadSessions()]).then(loadCloudSessions).catch((error) => toast(error.message));
+Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]).then(() => Promise.all([loadCloudSessions(), loadBookmarks()])).catch((error) => toast(error.message));

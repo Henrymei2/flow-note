@@ -75,6 +75,7 @@ AROUSAL_WEIGHTS: dict[str, float] = {
 }
 
 EMPTY_RESULT: dict[str, Any] = {"window_seconds": 0.0, "windows": [], "clusters": []}
+ALGORITHM_VERSION = "physiological-kmeans-v1"
 
 
 def compute_biosignal_clusters(
@@ -94,7 +95,7 @@ def compute_biosignal_clusters(
     handful of readable segments instead of a stripe of tiny ones.
     """
     if duration_seconds <= 0:
-        return {**EMPTY_RESULT, "window_seconds": 0.0}
+        return {**EMPTY_RESULT, "window_seconds": 0.0, "algorithm_version": ALGORITHM_VERSION}
 
     resolved_window_seconds = window_seconds or _auto_window_seconds(duration_seconds)
 
@@ -117,7 +118,11 @@ def compute_biosignal_clusters(
             series[tag] = (times, values)
 
     if not series:
-        return {**EMPTY_RESULT, "window_seconds": resolved_window_seconds}
+        return {
+            **EMPTY_RESULT,
+            "window_seconds": resolved_window_seconds,
+            "algorithm_version": ALGORITHM_VERSION,
+        }
 
     stride = resolved_window_seconds * (1 - OVERLAP_RATIO)
     window_starts = _window_starts(duration_seconds, resolved_window_seconds, stride)
@@ -134,7 +139,11 @@ def compute_biosignal_clusters(
     coverage = np.mean(~np.isnan(features), axis=1)
     valid_indices = np.flatnonzero(coverage >= MIN_FEATURE_COVERAGE)
     if len(valid_indices) < 2:
-        return {**EMPTY_RESULT, "window_seconds": resolved_window_seconds}
+        return {
+            **EMPTY_RESULT,
+            "window_seconds": resolved_window_seconds,
+            "algorithm_version": ALGORITHM_VERSION,
+        }
 
     valid_features = features[valid_indices]
     column_mean = np.nanmean(valid_features, axis=0)
@@ -178,7 +187,12 @@ def compute_biosignal_clusters(
         }
         for rank, old_id in enumerate(order)
     ]
-    return {"window_seconds": resolved_window_seconds, "windows": windows, "clusters": clusters}
+    return {
+        "algorithm_version": ALGORITHM_VERSION,
+        "window_seconds": resolved_window_seconds,
+        "windows": windows,
+        "clusters": clusters,
+    }
 
 
 def _arousal_score(scaled_center: np.ndarray) -> float:

@@ -170,6 +170,122 @@ def test_session_api_and_dashboard(tmp_path: object) -> None:
         assert client.delete(f"/api/sessions/{session['id']}").status_code == 204
 
 
+def test_local_bookmark_notebook_crud_search_and_validation(tmp_path: object) -> None:
+    app = create_app(Settings(database_path=tmp_path / "test.db", enable_midi=False))  # type: ignore[operator]
+    with TestClient(app) as client:
+        session = app.state.database.create_session(
+            project_title="Sara Transition Study",
+            fl_version="26.1.3",
+            api_version=45,
+            recorder_version="test",
+            timeline_zero_lsl=100.0,
+        )
+        session_id = str(session["id"])
+        app.state.database.finish_session(session_id, timeline_end_lsl=160.0)
+
+        created = client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": session_id,
+                "start_seconds": 12.25,
+                "end_seconds": 19.75,
+                "note": "overthinking this part",
+                "labels": ["Transition", "transition", "  Revision  "],
+                "source_type": "pattern",
+                "pattern_context": {
+                    "label": "Calmer · HR low, EDA low",
+                    "cluster_id": 0,
+                    "window_seconds": 7.5,
+                    "cluster_count": 3,
+                    "algorithm_version": "physiological-kmeans-v1",
+                },
+            },
+        )
+        assert created.status_code == 201
+        bookmark = created.json()
+        assert bookmark["labels"] == ["Transition", "Revision"]
+        assert bookmark["pattern_context"]["cluster_id"] == 0
+
+        search_results = client.get("/api/bookmarks", params={"search": "sara"}).json()
+        label_results = client.get("/api/bookmarks", params={"label": "TRANSITION"}).json()
+        assert search_results[0]["id"] == bookmark["id"]
+        assert label_results[0]["id"] == bookmark["id"]
+        labels = client.get("/api/bookmark-labels").json()
+        assert [(item["normalized_label"], item["count"]) for item in labels] == [
+            ("revision", 1),
+            ("transition", 1),
+        ]
+        detail = client.get(f"/api/sessions/{session_id}").json()
+        assert detail["bookmark_count"] == 1
+
+        updated = client.patch(
+            f"/api/bookmarks/{bookmark['id']}",
+            json={"note": "keep the first version", "labels": ["Decision"]},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["note"] == "keep the first version"
+        assert updated.json()["start_seconds"] == 12.25
+        archive_response = client.get(f"/api/sessions/{session_id}/share")
+        assert archive_response.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(archive_response.content)) as archive:
+            combined = b"\n".join(archive.read(name) for name in archive.namelist())
+            assert b"keep the first version" not in combined
+            assert b"Decision" not in combined
+
+        assert client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": session_id,
+                "start_seconds": 59,
+                "end_seconds": 61,
+                "note": "outside",
+                "source_type": "manual",
+                "labels": [],
+            },
+        ).status_code == 422
+        assert client.patch(
+            f"/api/bookmarks/{bookmark['id']}", json={"note": " ", "labels": []}
+        ).status_code == 422
+
+        assert client.delete(f"/api/bookmarks/{bookmark['id']}").status_code == 204
+        assert client.get(f"/api/bookmarks/{bookmark['id']}").status_code == 404
+
+        cascade = client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": session_id,
+                "start_seconds": 1,
+                "end_seconds": 2,
+                "note": "remove with session",
+                "source_type": "manual",
+                "labels": [],
+            },
+        )
+        assert cascade.status_code == 201
+        assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+        assert client.get("/api/bookmarks").json() == []
+
+        active = app.state.database.create_session(
+            project_title="Still recording",
+            fl_version=None,
+            api_version=None,
+            recorder_version="test",
+            timeline_zero_lsl=200.0,
+        )
+        recording_bookmark = client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": active["id"],
+                "start_seconds": 0,
+                "end_seconds": 1,
+                "note": "too early",
+                "source_type": "manual",
+                "labels": [],
+            },
+        )
+        assert recording_bookmark.status_code == 409
+
+
 def test_disconnected_start_is_rejected(tmp_path: object) -> None:
     app = create_app(Settings(database_path=tmp_path / "test.db", enable_midi=False))  # type: ignore[operator]
     with TestClient(app) as client:

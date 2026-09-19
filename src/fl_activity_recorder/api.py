@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import tempfile
 from collections.abc import AsyncIterator
@@ -133,6 +134,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except R2StorageError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return RedirectResponse(url=url, status_code=307)
+
+    @app.post("/api/bookmarks", status_code=201)
+    async def create_bookmark(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        session_id = str(payload.get("session_id") or "")
+        try:
+            session = database.get_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+        if session["status"] == "recording":
+            raise HTTPException(status_code=409, detail="Stop recording before adding a bookmark")
+        try:
+            values = _validated_bookmark_payload(payload, session)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return database.create_bookmark(session_id=session_id, **values)
+
+    @app.get("/api/bookmarks")
+    async def list_bookmarks(
+        search: str | None = None,
+        label: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if session_id:
+            try:
+                database.get_session(session_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail="Session not found") from exc
+        return database.list_bookmarks(search=search, label=label, session_id=session_id)
+
+    @app.get("/api/bookmark-labels")
+    async def list_bookmark_labels() -> list[dict[str, Any]]:
+        return database.list_bookmark_labels()
+
+    @app.get("/api/bookmarks/{bookmark_id}")
+    async def get_bookmark(bookmark_id: str) -> dict[str, Any]:
+        try:
+            return database.get_bookmark(bookmark_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Bookmark not found") from exc
+
+    @app.patch("/api/bookmarks/{bookmark_id}")
+    async def update_bookmark(bookmark_id: str, request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        try:
+            note = _required_note(payload.get("note"))
+            labels = _normalized_labels(payload.get("labels"))
+            return database.update_bookmark(bookmark_id, note=note, labels=labels)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Bookmark not found") from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete("/api/bookmarks/{bookmark_id}", status_code=204)
+    async def delete_bookmark(bookmark_id: str) -> Response:
+        if not database.delete_bookmark(bookmark_id):
+            raise HTTPException(status_code=404, detail="Bookmark not found")
+        return Response(status_code=204)
 
     @app.post("/api/sessions", status_code=201)
     async def start_session() -> dict[str, Any]:
@@ -511,6 +570,63 @@ def _combined_health(recorder: Recorder, emotibit: EmotiBitLslReceiver) -> dict[
 
 def _optional_float(value: Any) -> float | None:
     return float(value) if isinstance(value, int | float) else None
+
+
+def _validated_bookmark_payload(
+    payload: dict[str, Any], session: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        start = float(payload["start_seconds"])
+        end = float(payload["end_seconds"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Bookmark start and end times are required") from exc
+    duration = _session_duration(session)
+    if not math.isfinite(start) or not math.isfinite(end):
+        raise ValueError("Bookmark times must be finite")
+    if start < 0 or end <= start or end > duration + 1e-6:
+        raise ValueError("Bookmark interval must be within the completed session")
+    source_type = str(payload.get("source_type") or "manual")
+    if source_type not in {"manual", "pattern"}:
+        raise ValueError("Bookmark source must be manual or pattern")
+    pattern_context = payload.get("pattern_context")
+    if source_type == "pattern":
+        if not isinstance(pattern_context, dict):
+            raise ValueError("Pattern bookmarks require suggestion context")
+        required = {"label", "cluster_id", "window_seconds", "algorithm_version"}
+        if not required.issubset(pattern_context):
+            raise ValueError("Pattern suggestion context is incomplete")
+    elif pattern_context is not None:
+        raise ValueError("Manual bookmarks cannot include pattern context")
+    return {
+        "start_seconds": start,
+        "end_seconds": end,
+        "note": _required_note(payload.get("note")),
+        "source_type": source_type,
+        "labels": _normalized_labels(payload.get("labels")),
+        "pattern_context": pattern_context,
+    }
+
+
+def _required_note(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("A written note is required")
+    return value.strip()
+
+
+def _normalized_labels(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise TypeError("Labels must be a list of text values")
+    labels: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        label = " ".join(raw.split())
+        normalized = label.casefold()
+        if label and normalized not in seen:
+            labels.append(label)
+            seen.add(normalized)
+    return labels
 
 
 async def _heartbeat_monitor(recorder: Recorder) -> None:
