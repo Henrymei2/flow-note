@@ -163,7 +163,7 @@ def test_live_chunks_are_incremental_and_query_across_boundaries(tmp_path: Path)
     assert database.get_session(session_id)["sync_quality"] == "aligned_unverified"
 
 
-def test_long_query_uses_chunk_minmax(tmp_path: Path) -> None:
+def test_long_query_uses_pixel_minmax(tmp_path: Path) -> None:
     database = Database(tmp_path / "activity.db")
     session = create_session(database)
     store = LiveSignalStore(database, tmp_path / "sessions", chunk_samples=512)
@@ -179,7 +179,9 @@ def test_long_query_uses_chunk_minmax(tmp_path: Path) -> None:
     store.finish_session(15_400.0, interrupted=False, degraded=False)
     result = store.query(session_id, "EA", 0, 14_400, 10)
     assert result["mode"] == "minmax"
-    assert len(result["points"]) <= 10
+    assert len(result["points"]) == 10
+    assert result["points"][0] == [720.0, 0.0, 99.0]
+    assert result["points"][-1] == [13_680.0, 0.0, 99.0]
 
 
 def test_reopen_marks_live_asset_interrupted_and_keeps_sealed_chunks(tmp_path: Path) -> None:

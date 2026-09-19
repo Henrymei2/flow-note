@@ -178,6 +178,59 @@ def test_disconnected_start_is_rejected(tmp_path: object) -> None:
         assert response.json()["detail"]["code"] == "emotibit_lsl_unavailable"
 
 
+def test_capture_persists_audio_parameters_and_warns_for_mono(tmp_path: object) -> None:
+    """Persist actual browser audio settings and diagnose non-stereo capture."""
+    settings = Settings(
+        database_path=tmp_path / "test.db",  # type: ignore[operator]
+        data_directory=tmp_path / "sessions",  # type: ignore[operator]
+        enable_midi=False,
+    )
+    app = create_app(settings)
+    with TestClient(app) as client:
+        app.state.recorder.ingest(
+            DecodedMessage(
+                MessageKind.HELLO,
+                1,
+                {
+                    "api_version": 45,
+                    "observer_version": OBSERVER_VERSION,
+                    "observer_schema": OBSERVER_SCHEMA,
+                    "observer_build": OBSERVER_BUILD,
+                },
+            )
+        )
+        make_emotibit_ready(app)
+        session = client.post("/api/sessions").json()
+        capture = client.post(
+            f"/api/sessions/{session['id']}/capture/start",
+            json={
+                "started_lsl": app.state.recorder.clock.now(),
+                "mime_type": "video/webm;codecs=vp9,opus",
+                "metadata": {
+                    "has_audio": True,
+                    "audio_settings": {"channelCount": 1, "sampleRate": 48000},
+                    "audio_recorder": {
+                        "bits_per_second": 256000,
+                        "bitrate_mode": "variable",
+                        "mime_type": "video/webm;codecs=vp9,opus",
+                    },
+                },
+            },
+        )
+
+        assert capture.status_code == 200
+        assert capture.json()["metadata"]["audio_settings"] == {
+            "channelCount": 1,
+            "sampleRate": 48000,
+        }
+        assert capture.json()["metadata"]["audio_recorder"]["bits_per_second"] == 256000
+        diagnostic = app.state.database._connection.execute(
+            "SELECT code, payload_json FROM diagnostics ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert diagnostic["code"] == "audio_not_stereo"
+        assert json.loads(diagnostic["payload_json"]) == {"channel_count": 1}
+
+
 def test_clock_capture_timeline_and_range_video_api(tmp_path: object) -> None:
     settings = Settings(
         database_path=tmp_path / "test.db",  # type: ignore[operator]

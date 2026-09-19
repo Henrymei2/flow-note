@@ -164,7 +164,7 @@ class LiveSignalStore:
     def query(
         self, session_id: str, type_tag: str, start: float, end: float, pixels: int
     ) -> dict[str, Any]:
-        """Return raw or chunk-level min/max points for a visible timeline window."""
+        """Return raw or pixel-level min/max points for a visible timeline window."""
         stream = next(
             (
                 item
@@ -185,17 +185,29 @@ class LiveSignalStore:
                 points.extend([[float(row[0]), float(row[1])] for row in selected])
                 _close_memmap(array)
             return {"type_tag": type_tag, "mode": "raw", "points": points}
-        stride = max(1, math.ceil(len(chunks) / max(1, pixels)))
-        points = []
-        for index in range(0, len(chunks), stride):
-            group = chunks[index : index + stride]
-            points.append(
-                [
-                    float(group[0]["start_seconds"]),
-                    min(float(item["min_value"]) for item in group),
-                    max(float(item["max_value"]) for item in group),
-                ]
-            )
+        # Storage chunks are an implementation detail and can span several
+        # minutes. Reducing each chunk to one point makes a continuous signal
+        # look like a few isolated vertical strokes at wide zoom levels. Read
+        # the intersecting samples and aggregate them into screen-width time
+        # buckets instead, preserving the visible envelope without returning
+        # the entire recording.
+        bucket_count = max(1, pixels)
+        bucket_width = (end - start) / bucket_count
+        minima = np.full(bucket_count, np.inf)
+        maxima = np.full(bucket_count, -np.inf)
+        for chunk in chunks:
+            array = np.load(self._contained_path(str(chunk["relative_path"])), mmap_mode="r")
+            selected = array[(array[:, 0] >= start) & (array[:, 0] <= end)]
+            if len(selected):
+                indices = np.floor((selected[:, 0] - start) / bucket_width).astype(np.int64)
+                indices = np.clip(indices, 0, bucket_count - 1)
+                np.minimum.at(minima, indices, selected[:, 1])
+                np.maximum.at(maxima, indices, selected[:, 1])
+            _close_memmap(array)
+        points = [
+            [start + (index + 0.5) * bucket_width, float(minima[index]), float(maxima[index])]
+            for index in np.flatnonzero(np.isfinite(minima))
+        ]
         return {"type_tag": type_tag, "mode": "minmax", "points": points}
 
     def _ensure_stream(self, descriptor: SignalDescriptor) -> None:
