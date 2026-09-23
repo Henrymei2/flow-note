@@ -1,4 +1,4 @@
-const state = { health: null, sharing: null, sessions: [], cloudSessions: [], bookmarks: [], bookmarkLabels: [], selectedBookmark: null, selectedInterval: null, focusWindow: null, selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clusterMeta: null, clustersVisible: true, patternFilter: null };
+const state = { health: null, sharing: null, sessions: [], cloudSessions: [], bookmarks: [], bookmarkLabels: [], selectedBookmark: null, selectedInterval: null, focusWindow: null, selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clusterMeta: null, clustersVisible: true, patternFilter: null, collapsedTracks: new Set() };
 const $ = (id) => document.getElementById(id);
 
 async function request(url, options = {}) {
@@ -117,10 +117,22 @@ function renderTrackPicker() {
 }
 
 function selectedTracks() { return [...$("track-picker").querySelectorAll("input:checked")].map((input) => input.value); }
+
+// The zoom slider is a continuous exponential control (like a video editor's
+// timeline zoom), not a handful of fixed presets: each whole step doubles how
+// tight the view is, so dragging it feels smooth from the full session down
+// to a few-second window.
+function zoomFactor() { return Math.pow(2, Number($("zoom").value || 0)); }
+function updateZoomLabel() { const factor = zoomFactor(); $("zoom-label").textContent = `${factor < 10 ? factor.toFixed(1) : Math.round(factor)}×`; }
+function stepZoom(delta) {
+  const zoom = $("zoom"); zoom.value = Math.min(Number(zoom.max), Math.max(Number(zoom.min), Number(zoom.value) + delta));
+  state.focusWindow = null; updateZoomLabel(); loadTimeline();
+}
+
 async function loadTimeline() {
   if (!state.detail || state.detail.status === "recording") return; const duration = Math.max(1, sessionDuration(state.detail)); let start; let end;
   if (state.focusWindow) { start = state.focusWindow.start; end = state.focusWindow.end; }
-  else { const zoom = Number($("zoom").value || 1); const width = duration / zoom; start = Math.max(0, Math.min(duration - width, state.currentTime - width / 2)); end = Math.min(duration, start + width); }
+  else { const width = duration / zoomFactor(); start = Math.max(0, Math.min(duration - width, state.currentTime - width / 2)); end = Math.min(duration, start + width); }
   const params = new URLSearchParams({ start, end, pixels: 1200, tracks: selectedTracks().join(",") });
   state.timeline = await request(`/api/sessions/${state.detail.id}/timeline?${params}`); drawSignals();
 }
@@ -145,16 +157,60 @@ function drawSignals() {
   const box = $("signal-tracks"); box.replaceChildren(); if (!state.timeline) return;
   const span = state.timeline.end - state.timeline.start;
   for (const signal of state.timeline.signals) {
-    const stream = state.detail.signals.find((item) => item.type_tag === signal.type_tag); const row = document.createElement("div"); row.className = "signal-track";
-    const label = document.createElement("span"); label.textContent = stream?.display_name || signal.type_tag; const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 72;
+    const stream = state.detail.signals.find((item) => item.type_tag === signal.type_tag); const name = stream?.display_name || signal.type_tag;
+    const collapsed = state.collapsedTracks.has(signal.type_tag);
+    const row = document.createElement("div"); row.className = `signal-track${collapsed ? " collapsed" : ""}`;
+    const label = document.createElement("button"); label.type = "button"; label.className = "lane-label lane-toggle"; label.setAttribute("aria-expanded", String(!collapsed));
+    const chevron = document.createElement("span"); chevron.className = "lane-chevron"; chevron.setAttribute("aria-hidden", "true");
+    label.append(chevron, document.createTextNode(name));
+    label.addEventListener("click", () => {
+      const next = !state.collapsedTracks.has(signal.type_tag);
+      if (next) state.collapsedTracks.add(signal.type_tag); else state.collapsedTracks.delete(signal.type_tag);
+      row.classList.toggle("collapsed", next); label.setAttribute("aria-expanded", String(!next));
+    });
+    const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 72;
     drawSignal(canvas, signal); enableIntervalDrag(canvas);
     row.append(label, canvas); box.append(row);
   }
   const ruler = $("event-ruler"); ruler.replaceChildren();
-  drawIntervalOverlay(ruler);
   for (const event of state.timeline.events) { const marker = document.createElement("button"); marker.className = "event-marker"; marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`; marker.title = `${formatTime(event.timeline_seconds)} · ${event.summary}`; marker.addEventListener("click", (event_) => { event_.stopPropagation(); seekTimeline(event.timeline_seconds); }); ruler.append(marker); }
   enableIntervalDrag(ruler);
-  drawClusters(span);
+  drawTimelineRuler(span); drawPatternStrip(span); drawPatternOverlay(span);
+  updateTimelinePlayhead(); updateTimelineSelection();
+}
+
+function niceRulerStep(rawStep) {
+  const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
+  return steps.find((value) => value >= rawStep) || rawStep;
+}
+function drawTimelineRuler(span) {
+  const ruler = $("timeline-ruler"); ruler.replaceChildren(); if (!state.timeline || span <= 0) return;
+  const step = niceRulerStep(span / 6); const first = Math.ceil(state.timeline.start / step) * step;
+  for (let time = first; time <= state.timeline.end + 0.0001; time += step) {
+    const tick = document.createElement("div"); tick.className = "ruler-tick"; tick.style.left = `${(time - state.timeline.start) / span * 100}%`;
+    const label = document.createElement("span"); label.textContent = formatTime(time); tick.append(label); ruler.append(tick);
+  }
+}
+
+// The playhead line and selection box are single elements overlaid on the whole
+// timeline-stack (not redrawn per track), so every lane and signal trace stays
+// visually stitched to one shared time axis, like a video editor's cursor.
+function timelineContentBox() {
+  const stack = $("timeline-stack"); const stackRect = stack.getBoundingClientRect(); const contentRect = $("timeline-ruler").getBoundingClientRect();
+  return { left: contentRect.left - stackRect.left, width: contentRect.width };
+}
+function updateTimelinePlayhead() {
+  const line = $("timeline-playhead"); if (!state.timeline) { line.hidden = true; return; }
+  const span = state.timeline.end - state.timeline.start; const ratio = (state.currentTime - state.timeline.start) / span;
+  if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1) { line.hidden = true; return; }
+  const { left, width } = timelineContentBox(); line.hidden = false; line.style.left = `${left + ratio * width}px`;
+}
+function updateTimelineSelection() {
+  const box = $("timeline-selection"); if (!state.selectedInterval || !state.timeline) { box.hidden = true; return; }
+  const start = Math.max(state.selectedInterval.start, state.timeline.start); const end = Math.min(state.selectedInterval.end, state.timeline.end);
+  if (end <= start) { box.hidden = true; return; }
+  const span = state.timeline.end - state.timeline.start; const { left, width } = timelineContentBox();
+  box.hidden = false; box.style.left = `${left + (start - state.timeline.start) / span * width}px`; box.style.width = `${(end - start) / span * width}px`;
 }
 
 function clusterLabel(id) { return state.clusterLegend.find((item) => item.id === id)?.label || `pattern ${id + 1}`; }
@@ -182,23 +238,43 @@ function clusterColor(rank, total) {
   return "rgb(255, 93, 108)";
 }
 
-function drawClusters(span) {
-  const toggleRow = $("cluster-toggle-row"); const ruler = $("cluster-ruler");
-  toggleRow.hidden = state.clusters.length === 0; ruler.replaceChildren();
-  if (!state.clustersVisible) { ruler.hidden = true; renderClusterLegend(); return; }
-  const visible = state.clusters.filter((window) => window.end_seconds > state.timeline.start && window.start_seconds < state.timeline.end);
-  ruler.hidden = visible.length === 0;
+function visiblePatternWindows() {
+  return state.clusters.filter((window) => window.end_seconds > state.timeline.start && window.start_seconds < state.timeline.end);
+}
+
+// The slim clickable strip lives on the time ruler (like chapter markers in a
+// video editor) so a pattern window is always one click away, independent of
+// whether the full-height overlay tint below is switched on.
+function drawPatternStrip(span) {
+  const hasClusters = state.clusters.length > 0; $("pattern-toggle-button").hidden = !hasClusters; $("pattern-legend-row").hidden = !hasClusters;
+  const strip = $("pattern-strip"); strip.replaceChildren(); if (!state.clustersVisible) { renderClusterLegend(); return; }
   const total = state.clusterLegend.length;
-  for (const window of visible) {
+  for (const window of visiblePatternWindows()) {
     const start = Math.max(window.start_seconds, state.timeline.start); const end = Math.min(window.end_seconds, state.timeline.end);
     const segment = document.createElement("button"); segment.className = "cluster-segment";
     segment.style.left = `${(start - state.timeline.start) / span * 100}%`; segment.style.width = `${Math.max(0, (end - start) / span * 100)}%`;
     segment.style.background = clusterColor(window.cluster, total);
     segment.title = `${formatTime(window.start_seconds)}–${formatTime(window.end_seconds)} · ${clusterLabel(window.cluster)}`;
     segment.addEventListener("click", () => applyPatternFilter(window));
-    ruler.append(segment);
+    strip.append(segment);
   }
   renderClusterLegend();
+}
+
+// The overlay is a passive color wash sitting behind the event lane and every
+// biosignal canvas (negative z-index, see CSS), so a pattern suggestion reads
+// directly on top of the trace it was detected from instead of living in its
+// own separate row.
+function drawPatternOverlay(span) {
+  const overlay = $("pattern-overlay"); overlay.replaceChildren(); if (!state.clustersVisible) return;
+  const total = state.clusterLegend.length; const { left, width } = timelineContentBox();
+  for (const window of visiblePatternWindows()) {
+    const start = Math.max(window.start_seconds, state.timeline.start); const end = Math.min(window.end_seconds, state.timeline.end);
+    const band = document.createElement("div"); band.className = "pattern-band";
+    band.style.left = `${left + (start - state.timeline.start) / span * width}px`; band.style.width = `${Math.max(0, (end - start) / span * width)}px`;
+    band.style.background = clusterColor(window.cluster, total);
+    overlay.append(band);
+  }
 }
 
 function renderClusterLegend() {
@@ -224,30 +300,25 @@ function applyPatternFilter(window) {
   });
 }
 
-$("cluster-toggle").addEventListener("change", (event) => { state.clustersVisible = event.target.checked; drawSignals(); });
+$("pattern-toggle-button").addEventListener("click", () => {
+  state.clustersVisible = !state.clustersVisible;
+  $("pattern-toggle-button").classList.toggle("active", state.clustersVisible); $("pattern-toggle-button").setAttribute("aria-pressed", String(state.clustersVisible));
+  drawSignals();
+});
 $("pattern-filter-clear").addEventListener("click", clearIntervalSelection);
 
+for (const button of document.querySelectorAll(".lane-toggle")) {
+  button.addEventListener("click", () => {
+    const row = button.closest(".timeline-row"); const collapsed = !row.classList.contains("collapsed");
+    row.classList.toggle("collapsed", collapsed); button.setAttribute("aria-expanded", String(!collapsed));
+  });
+}
+
 function drawSignal(canvas, signal) {
-  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) { drawCanvasInterval(ctx, canvas); return; } const values = points.flatMap((point) => point.slice(1));
+  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return; const values = points.flatMap((point) => point.slice(1));
   const min = Math.min(...values), max = Math.max(...values), span = max - min || 1; const x = (time) => (time - state.timeline.start) / (state.timeline.end - state.timeline.start) * canvas.width; const y = (value) => canvas.height - 4 - (value - min) / span * (canvas.height - 8);
   ctx.strokeStyle = "#ff7a1a"; ctx.lineWidth = 1; ctx.beginPath();
   if (signal.mode === "raw") points.forEach((point, index) => index ? ctx.lineTo(x(point[0]), y(point[1])) : ctx.moveTo(x(point[0]), y(point[1]))); else points.forEach((point) => { ctx.moveTo(x(point[0]), y(point[1])); ctx.lineTo(x(point[0]), y(point[2])); }); ctx.stroke();
-  drawCanvasInterval(ctx, canvas);
-}
-
-function drawCanvasInterval(ctx, canvas) {
-  if (!state.selectedInterval || !state.timeline) return;
-  const start = Math.max(state.selectedInterval.start, state.timeline.start); const end = Math.min(state.selectedInterval.end, state.timeline.end);
-  if (end <= start) return; const span = state.timeline.end - state.timeline.start;
-  const x = (start - state.timeline.start) / span * canvas.width; const width = (end - start) / span * canvas.width;
-  ctx.fillStyle = "rgba(105,168,255,.2)"; ctx.fillRect(x, 0, width, canvas.height); ctx.strokeStyle = "#69a8ff"; ctx.strokeRect(x, 0, width, canvas.height);
-}
-
-function drawIntervalOverlay(container) {
-  if (!state.selectedInterval || !state.timeline) return;
-  const start = Math.max(state.selectedInterval.start, state.timeline.start); const end = Math.min(state.selectedInterval.end, state.timeline.end);
-  if (end <= start) return; const span = state.timeline.end - state.timeline.start; const overlay = document.createElement("div"); overlay.className = "interval-overlay";
-  overlay.style.left = `${(start - state.timeline.start) / span * 100}%`; overlay.style.width = `${(end - start) / span * 100}%`; container.append(overlay);
 }
 
 function pointerTime(event, element) { const rect = element.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); return state.timeline.start + ratio * (state.timeline.end - state.timeline.start); }
@@ -304,6 +375,7 @@ async function openBookmark(bookmark) {
 function seekTimeline(seconds) {
   state.currentTime = Math.max(0, Number(seconds)); $("playhead").value = state.currentTime; $("playhead-label").textContent = formatTime(state.currentTime);
   const video = $("session-video"); if (!video.hidden && Math.abs(video.currentTime - (state.currentTime - Number(video.dataset.offset || 0))) > 0.1) video.currentTime = Math.max(0, state.currentTime - Number(video.dataset.offset || 0));
+  updateTimelinePlayhead();
 }
 
 async function synchronizeBrowserClock() {
@@ -422,6 +494,9 @@ $("close-share-modal").addEventListener("click", () => { $("share-modal").hidden
 $("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderEvents(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); toast("Session deleted"); });
 for (const id of ["category", "confidence"]) $(id).addEventListener("change", loadEvents);
 let searchTimer; $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadEvents, 250); });
-$("playhead").addEventListener("input", (event) => seekTimeline(event.target.value)); $("zoom").addEventListener("change", () => { state.focusWindow = null; loadTimeline(); }); $("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
+$("playhead").addEventListener("input", (event) => seekTimeline(event.target.value));
+let zoomTimer; $("zoom").addEventListener("input", () => { state.focusWindow = null; updateZoomLabel(); clearTimeout(zoomTimer); zoomTimer = setTimeout(loadTimeline, 60); });
+$("zoom-in").addEventListener("click", () => stepZoom(0.5)); $("zoom-out").addEventListener("click", () => stepZoom(-0.5));
+$("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
 const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = { ...state.health, ...item.health }; renderHealth(); } if (item.type === "emotibit_status") { state.health = { ...state.health, emotibit: item.emotibit }; state.liveDescriptors = item.emotibit.streams || []; renderHealth(); if (state.detail?.status === "recording") renderTrackPicker(); } if (["session_started", "session_stopped"].includes(item.type)) await refreshAll(); if (item.type === "emotibit_samples") appendLiveSamples(item); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); renderEvents(); if (state.detail?.status === "recording") renderLiveSignals(); } }; live.onerror = () => $("connection").classList.remove("connected");
 Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]).then(() => Promise.all([loadCloudSessions(), loadBookmarks()])).catch((error) => toast(error.message));

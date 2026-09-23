@@ -78,6 +78,8 @@ h2 { margin-bottom: 0; font-size: 18px; }
 .review { border: 1px solid var(--line); border-radius: 11px; padding: 16px; display: grid; gap: 14px; }
 .review[hidden] { display: none; }
 .source-status { display: flex; flex-wrap: wrap; gap: 8px; }
+.review-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.toolbar-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .selection-help { margin: 0; color: var(--muted); font-size: 11px; }
 .source-pill { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; color: var(--muted); font-size: 11px; }
 .source-pill.ready { color: var(--green); border-color: rgba(83,211,147,.35); }
@@ -85,28 +87,69 @@ h2 { margin-bottom: 0; font-size: 18px; }
 .source-pill.degraded { color: var(--orange); border-color: rgba(255,122,26,.35); }
 .source-pill.interrupted, .source-pill.missing { color: var(--red); }
 #session-video { width: 100%; max-height: 54vh; background: #000; border-radius: 8px; }
-.event-ruler { position: relative; height: 18px; border-bottom: 1px solid var(--line); background: linear-gradient(90deg, transparent 49.9%, rgba(255,255,255,.05) 50%, transparent 50.1%); }
-.interval-overlay { position: absolute; inset-block: 0; pointer-events: none; background: rgba(105,168,255,.2); border-inline: 1px solid var(--blue); z-index: 0; }
+
+/* Toggle-button: a simple lit indicator, used for the pattern overlay's single
+   on/off control. */
+.toggle-button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); }
+.toggle-button .toggle-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.toggle-button.active { color: var(--text); background: var(--orange-soft); border-color: rgba(255,122,26,.35); }
+.toggle-button.active .toggle-dot { background: var(--orange); }
+.toggle-button[hidden] { display: none; }
+
+/* Unified timeline: one bordered card holding the ruler, the event lane, and
+   every biosignal track, all sharing the same label-column width so rows line
+   up like tracks in a video editor. A single playhead line and a single
+   selection box are overlaid across the whole stack instead of being redrawn
+   per row, so the cursor and the selection stay visually continuous across
+   every lane. Pattern suggestions are not their own row: they wash the whole
+   stack as a translucent color overlay sitting behind every trace (negative
+   z-index), plus a slim clickable marker strip on the ruler for quick recall. */
+.timeline-stack { position: relative; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--panel); --lane-label-width: 128px; }
+.pattern-overlay { position: absolute; top: 23px; bottom: 0; left: 0; right: 0; z-index: -1; pointer-events: none; }
+.pattern-band { position: absolute; top: 0; bottom: 0; opacity: .25; }
+.timeline-row { display: grid; grid-template-columns: var(--lane-label-width) minmax(0,1fr); align-items: stretch; border-bottom: 1px solid var(--line); }
+.timeline-row:last-child { border-bottom: 0; }
+.timeline-ruler-row { background: var(--panel-2); }
+.timeline-ruler-row .lane-content { padding: 0; display: block; }
+.lane-label { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--muted); font-size: 11px; letter-spacing: .02em; }
+.lane-toggle { cursor: pointer; }
+.lane-toggle:hover { color: var(--text); }
+.lane-chevron { display: inline-block; width: 0; height: 0; flex-shrink: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--muted); transition: transform .15s ease; }
+.timeline-row.collapsed .lane-chevron, .signal-track.collapsed .lane-chevron { transform: rotate(-90deg); }
+.timeline-row.collapsed .lane-content { display: none; }
+.lane-content { position: relative; min-width: 0; padding: 6px 0; display: flex; align-items: center; }
+.timeline-ruler { position: relative; height: 14px; width: 100%; }
+.ruler-tick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--line); }
+.ruler-tick span { position: absolute; top: 1px; left: 5px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pattern-strip { position: relative; height: 6px; margin-top: 3px; border-radius: 3px; overflow: hidden; background: var(--panel-2); }
+.timeline-playhead { position: absolute; top: 23px; bottom: 0; width: 1px; background: var(--red); pointer-events: none; z-index: 4; }
+.timeline-playhead::before { content: ""; position: absolute; top: -5px; left: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--red); }
+.timeline-selection { position: absolute; top: 23px; bottom: 0; background: rgba(105,168,255,.2); border-inline: 1px solid var(--blue); pointer-events: none; z-index: 3; }
+.event-ruler { position: relative; height: 18px; width: 100%; }
 .event-marker { position: absolute; top: 2px; width: 5px; height: 14px; padding: 0; transform: translateX(-50%); border: 0; border-radius: 2px; background: var(--orange); cursor: pointer; }
-.cluster-ruler { position: relative; height: 9px; margin-top: 5px; border-radius: 3px; overflow: hidden; background: var(--panel-2); }
 .cluster-segment { position: absolute; top: 0; height: 100%; padding: 0; border: 0; cursor: pointer; opacity: .85; }
 .cluster-segment:hover { opacity: 1; }
-.cluster-legend { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.pattern-legend-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pattern-legend-row[hidden] { display: none; }
+.cluster-legend { display: flex; flex-wrap: wrap; gap: 7px; }
 .cluster-legend[hidden] { display: none; }
 .cluster-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 8px; color: var(--muted); font-size: 11px; }
 .cluster-chip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; font-style: normal; }
-.cluster-toggle { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; margin-top: 10px; cursor: pointer; }
-.cluster-toggle input { width: auto; }
-.cluster-toggle[hidden] { display: none; }
-.playhead-controls { display: grid; grid-template-columns: 84px minmax(150px,1fr) 130px; align-items: center; gap: 10px; }
+.playhead-controls { display: flex; align-items: center; gap: 10px; }
+.playhead-controls input[type="range"] { width: 200px; }
 #playhead-label { color: var(--orange); font-variant-numeric: tabular-nums; font-size: 12px; }
+.zoom-control { display: flex; align-items: center; gap: 6px; }
+.zoom-control #zoom { width: 130px; }
+.zoom-btn { width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.zoom-btn:hover { color: var(--text); border-color: var(--muted); }
+#zoom-label { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; min-width: 36px; }
 .track-picker { display: flex; flex-wrap: wrap; gap: 9px; }
 .track-picker label { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font-size: 11px; }
 .track-picker input { width: auto; }
-.signal-tracks { display: grid; gap: 7px; }
-.signal-track { display: grid; grid-template-columns: 130px minmax(0,1fr); align-items: center; border-top: 1px solid var(--line); padding-top: 7px; }
-.signal-track span { color: var(--muted); font-size: 11px; }
+.signal-tracks { display: grid; }
+.signal-track { display: grid; grid-template-columns: var(--lane-label-width) minmax(0,1fr); align-items: center; border-bottom: 1px solid var(--line); padding: 6px 0; }
 .signal-track canvas { width: 100%; height: 72px; cursor: crosshair; }
+.signal-track.collapsed canvas { display: none; }
 .annotation-composer { border: 1px solid rgba(105,168,255,.4); border-radius: 10px; padding: 16px; display: grid; gap: 13px; background: rgba(105,168,255,.05); }
 .annotation-composer[hidden] { display: none; }
 .annotation-heading { display: flex; justify-content: space-between; align-items: start; }
@@ -147,6 +190,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--orange); }
   .event { grid-template-columns: 70px 12px 1fr; }
   .badge { grid-column: 3; justify-self: start; }
   .summary { align-items: flex-start; gap: 18px; flex-direction: column; }
-  .playhead-controls, .signal-track { grid-template-columns: 1fr; }
+  .playhead-controls input[type="range"] { width: 120px; }
+  .zoom-control #zoom { width: 90px; }
+  .timeline-stack { --lane-label-width: 88px; }
   .interval-fields { grid-template-columns: 1fr; }
 }

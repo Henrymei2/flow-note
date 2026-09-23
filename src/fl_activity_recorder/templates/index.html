@@ -73,22 +73,54 @@
 
       <div class="review panel" id="review-panel" hidden>
         <div class="source-status" id="source-status"></div>
-        <p class="selection-help" id="selection-help">Drag across the event ruler or a physiological trace to select an interval.</p>
-        <video id="session-video" controls preload="metadata" hidden></video>
-        <div id="event-ruler" class="event-ruler" aria-label="FL Studio event markers"></div>
-        <label class="cluster-toggle" id="cluster-toggle-row" hidden>
-          <input type="checkbox" id="cluster-toggle" checked>
-          <span>Pattern suggestions</span>
-        </label>
-        <div id="cluster-ruler" class="cluster-ruler" aria-label="Bio signal pattern clusters" hidden></div>
-        <div id="cluster-legend" class="cluster-legend" aria-label="Pattern suggestion legend" hidden></div>
-        <div class="playhead-controls">
-          <span id="playhead-label">00:00.000</span>
-          <input id="playhead" type="range" min="0" max="1" step="0.001" value="0">
-          <select id="zoom"><option value="1">Full session</option><option value="4">4× zoom</option><option value="16">16× zoom</option></select>
+        <div class="review-toolbar">
+          <p class="selection-help" id="selection-help">Drag across the timeline to select an interval.</p>
+          <div class="toolbar-controls">
+            <button type="button" class="toggle-button active" id="pattern-toggle-button" hidden aria-pressed="true">
+              <span class="toggle-dot" aria-hidden="true"></span>Pattern overlay
+            </button>
+            <div class="playhead-controls">
+              <span id="playhead-label">00:00.000</span>
+              <input id="playhead" type="range" min="0" max="1" step="0.001" value="0">
+              <div class="zoom-control">
+                <button type="button" class="zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
+                <input id="zoom" type="range" min="0" max="9" step="0.1" value="0" aria-label="Timeline zoom">
+                <button type="button" class="zoom-btn" id="zoom-in" aria-label="Zoom in">+</button>
+                <span id="zoom-label">1.0×</span>
+              </div>
+            </div>
+          </div>
         </div>
+        <video id="session-video" controls preload="metadata" hidden></video>
+
         <div id="track-picker" class="track-picker"></div>
-        <div id="signal-tracks" class="signal-tracks"></div>
+
+        <div class="timeline-stack" id="timeline-stack">
+          <div class="pattern-overlay" id="pattern-overlay" aria-hidden="true"></div>
+          <div class="timeline-row timeline-ruler-row">
+            <div class="lane-label"></div>
+            <div class="lane-content">
+              <div id="timeline-ruler" class="timeline-ruler"></div>
+              <div id="pattern-strip" class="pattern-strip" aria-label="Bio signal pattern markers"></div>
+            </div>
+          </div>
+          <div class="timeline-row" id="event-lane">
+            <button type="button" class="lane-label lane-toggle" aria-expanded="true">
+              <span class="lane-chevron" aria-hidden="true"></span>Events
+            </button>
+            <div class="lane-content">
+              <div id="event-ruler" class="event-ruler" aria-label="FL Studio event markers"></div>
+            </div>
+          </div>
+          <div id="signal-tracks" class="signal-tracks"></div>
+          <div class="timeline-playhead" id="timeline-playhead" hidden></div>
+          <div class="timeline-selection" id="timeline-selection" hidden></div>
+        </div>
+
+        <div class="pattern-legend-row" id="pattern-legend-row" hidden>
+          <div id="cluster-legend" class="cluster-legend" aria-label="Pattern suggestion legend"></div>
+        </div>
+
         <form class="annotation-composer" id="annotation-composer" hidden>
           <div class="annotation-heading">
             <div>
