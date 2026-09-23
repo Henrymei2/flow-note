@@ -299,10 +299,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         window_seconds: float | None = Query(default=None, ge=5.0, le=120.0),
         clusters: int = Query(default=3, ge=2, le=6),
     ) -> dict[str, Any]:
-        """Group physiological windows into labeled pattern-suggestion regions.
+        """Return ranked, non-overlapping physiological pattern suggestions.
 
-        `window_seconds` is auto-sized from the session length when omitted, so
-        the caller only needs to override it for a manual sensitivity tweak.
+        The scorer uses fixed per-modality windows. `window_seconds` remains a
+        compatibility parameter, while `clusters` can reduce the default top
+        three suggestions.
         """
         try:
             session = database.get_session(session_id)
