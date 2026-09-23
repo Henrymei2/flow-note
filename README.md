@@ -124,6 +124,12 @@ session can start; no SD-card recording or post-session DataParser import is req
 [unified-timeline.md](docs/unified-timeline.md) for setup, collection, quality labels, and platform
 validation steps.
 
+After a session, select a suggested physiological pattern or drag across the synchronized event
+ruler or signal traces to annotate an interval. Saved notes and free-form labels appear in the
+cross-session Bookmarks notebook and reopen the original video, FL Studio events, and physiology
+in context. Bookmarks stay on this device and are not included in research archives or cloud
+uploads.
+
 The companion blocks recording when FL Studio is still running an older observer. Run the
 installer again, then reload Activity Recorder from **View → Script output** or restart FL Studio.
 

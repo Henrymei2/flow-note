@@ -6,7 +6,6 @@ import json
 import time
 import zipfile
 
-import pytest
 from fastapi.testclient import TestClient
 
 from fl_activity_recorder.api import create_app
@@ -168,6 +167,122 @@ def test_session_api_and_dashboard(tmp_path: object) -> None:
         assert client.delete(f"/api/sessions/{session['id']}").status_code == 409
         assert client.post(f"/api/sessions/{session['id']}/stop").status_code == 200
         assert client.delete(f"/api/sessions/{session['id']}").status_code == 204
+
+
+def test_local_bookmark_notebook_crud_search_and_validation(tmp_path: object) -> None:
+    app = create_app(Settings(database_path=tmp_path / "test.db", enable_midi=False))  # type: ignore[operator]
+    with TestClient(app) as client:
+        session = app.state.database.create_session(
+            project_title="Sara Transition Study",
+            fl_version="26.1.3",
+            api_version=45,
+            recorder_version="test",
+            timeline_zero_lsl=100.0,
+        )
+        session_id = str(session["id"])
+        app.state.database.finish_session(session_id, timeline_end_lsl=160.0)
+
+        created = client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": session_id,
+                "start_seconds": 12.25,
+                "end_seconds": 19.75,
+                "note": "overthinking this part",
+                "labels": ["Transition", "transition", "  Revision  "],
+                "source_type": "pattern",
+                "pattern_context": {
+                    "label": "Calmer · HR low, EDA low",
+                    "cluster_id": 0,
+                    "window_seconds": 7.5,
+                    "cluster_count": 3,
+                    "algorithm_version": "physiological-kmeans-v1",
+                },
+            },
+        )
+        assert created.status_code == 201
+        bookmark = created.json()
+        assert bookmark["labels"] == ["Transition", "Revision"]
+        assert bookmark["pattern_context"]["cluster_id"] == 0
+
+        search_results = client.get("/api/bookmarks", params={"search": "sara"}).json()
+        label_results = client.get("/api/bookmarks", params={"label": "TRANSITION"}).json()
+        assert search_results[0]["id"] == bookmark["id"]
+        assert label_results[0]["id"] == bookmark["id"]
+        labels = client.get("/api/bookmark-labels").json()
+        assert [(item["normalized_label"], item["count"]) for item in labels] == [
+            ("revision", 1),
+            ("transition", 1),
+        ]
+        detail = client.get(f"/api/sessions/{session_id}").json()
+        assert detail["bookmark_count"] == 1
+
+        updated = client.patch(
+            f"/api/bookmarks/{bookmark['id']}",
+            json={"note": "keep the first version", "labels": ["Decision"]},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["note"] == "keep the first version"
+        assert updated.json()["start_seconds"] == 12.25
+        archive_response = client.get(f"/api/sessions/{session_id}/share")
+        assert archive_response.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(archive_response.content)) as archive:
+            combined = b"\n".join(archive.read(name) for name in archive.namelist())
+            assert b"keep the first version" not in combined
+            assert b"Decision" not in combined
+
+        assert client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": session_id,
+                "start_seconds": 59,
+                "end_seconds": 61,
+                "note": "outside",
+                "source_type": "manual",
+                "labels": [],
+            },
+        ).status_code == 422
+        assert client.patch(
+            f"/api/bookmarks/{bookmark['id']}", json={"note": " ", "labels": []}
+        ).status_code == 422
+
+        assert client.delete(f"/api/bookmarks/{bookmark['id']}").status_code == 204
+        assert client.get(f"/api/bookmarks/{bookmark['id']}").status_code == 404
+
+        cascade = client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": session_id,
+                "start_seconds": 1,
+                "end_seconds": 2,
+                "note": "remove with session",
+                "source_type": "manual",
+                "labels": [],
+            },
+        )
+        assert cascade.status_code == 201
+        assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+        assert client.get("/api/bookmarks").json() == []
+
+        active = app.state.database.create_session(
+            project_title="Still recording",
+            fl_version=None,
+            api_version=None,
+            recorder_version="test",
+            timeline_zero_lsl=200.0,
+        )
+        recording_bookmark = client.post(
+            "/api/bookmarks",
+            json={
+                "session_id": active["id"],
+                "start_seconds": 0,
+                "end_seconds": 1,
+                "note": "too early",
+                "source_type": "manual",
+                "labels": [],
+            },
+        )
+        assert recording_bookmark.status_code == 409
 
 
 def test_disconnected_start_is_rejected(tmp_path: object) -> None:
@@ -490,8 +605,8 @@ def test_interrupted_session_without_video_or_signals_can_be_shared(tmp_path: ob
         assert detail["emotibit_status"] == "missing"
 
 
-def test_biosignal_clusters_group_distinct_windows(tmp_path: object) -> None:
-    """Windows with visibly different EDA/heart-rate levels land in different clusters."""
+def test_biosignal_clusters_return_ranked_non_overlapping_suggestions(tmp_path: object) -> None:
+    """Separated heart-rate anomalies become ranked suggestions in the existing schema."""
     settings = Settings(
         database_path=tmp_path / "test.db",  # type: ignore[operator]
         data_directory=tmp_path / "sessions",  # type: ignore[operator]
@@ -517,60 +632,66 @@ def test_biosignal_clusters_group_distinct_windows(tmp_path: object) -> None:
         zero = float(session["timeline_zero_lsl"])
 
         duration = 300.0
-        phase_boundary = 150.0
-        sample_period = 2.0
-        offsets = [t * sample_period + 0.5 for t in range(int(duration / sample_period))]
-        constant_tags = {"EA": (0.1, 0.9), "HR": (60.0, 100.0), "SA": (1.0, 5.0), "SR": (1.0, 5.0),
-                          "SF": (1.0, 5.0), "T1": (1.0, 5.0), "TH": (1.0, 5.0)}
-        motion_tags = ["AX", "AY", "AZ", "GX", "GY", "GZ", "MX", "MY", "MZ"]
-
-        for index, (tag, (low, high)) in enumerate(constant_tags.items()):
-            descriptor = SignalDescriptor(
-                track_id=tag, type_tag=tag, display_name=tag, group_name="test",
-                unit=None, nominal_rate=1 / sample_period, stream_name=f"EmotiBit-{tag}",
-                source_id="test", channel_index=index, channel_format="1",
-            )
-            values = [low if t < phase_boundary else high for t in offsets]
-            app.state.signals.append(descriptor, [zero + t for t in offsets], values)
-
-        # Motion channels differ in within-window *variability*, not level: a near-zero
-        # amplitude square wave before the boundary ("still"), a large one after ("moving").
-        for index, tag in enumerate(motion_tags):
-            descriptor = SignalDescriptor(
-                track_id=tag, type_tag=tag, display_name=tag, group_name="test",
-                unit=None, nominal_rate=1 / sample_period, stream_name=f"EmotiBit-{tag}",
-                source_id="test", channel_index=index, channel_format="1",
-            )
-            values = [
-                (0.02 if t < phase_boundary else 3.0) * (1 if i % 2 == 0 else -1)
-                for i, t in enumerate(offsets)
-            ]
-            app.state.signals.append(descriptor, [zero + t for t in offsets], values)
+        offsets = [index + 0.5 for index in range(int(duration))]
+        descriptor = SignalDescriptor(
+            track_id="HR",
+            type_tag="HR",
+            display_name="HR",
+            group_name="test",
+            unit="bpm",
+            nominal_rate=1.0,
+            stream_name="EmotiBit-HR",
+            source_id="test",
+            channel_index=0,
+            channel_format="1",
+        )
+        peaks = ((30.0, 42.0, 35.0), (140.0, 152.0, 50.0), (250.0, 262.0, 65.0))
+        values = []
+        for index, timestamp in enumerate(offsets):
+            value = 70.0 + 0.15 * (index % 7)
+            for start, end, increase in peaks:
+                if start <= timestamp < end:
+                    value += increase
+            values.append(value)
+        app.state.signals.append(descriptor, [zero + timestamp for timestamp in offsets], values)
 
         recorder.stop_session(session["id"], timeline_end_lsl=zero + duration)
 
-        response = client.get(f"/api/sessions/{session['id']}/biosignal-clusters")
+        response = client.get(
+            f"/api/sessions/{session['id']}/biosignal-clusters",
+            params={"window_seconds": 120, "clusters": 3},
+        )
         assert response.status_code == 200
         body = response.json()
-        # Auto-sizing targets ~28 windows over the session, clamped to [6, 30]s.
-        assert body["window_seconds"] == duration / 28
+        assert body["algorithm_version"] == "physiological-pattern-score-v2"
+        assert body["window_seconds"] == 1.0
 
         regions = body["windows"]
         assert regions == sorted(regions, key=lambda w: w["start_seconds"])
-        # Consecutive same-cluster windows are merged, so the raw windows collapse
-        # into a handful of regions rather than being returned one by one.
-        assert 2 <= len(regions) < 15
-        assert regions[0]["cluster"] != regions[-1]["cluster"]
-        assert regions[0]["start_seconds"] == 0.0
-        assert regions[-1]["end_seconds"] == pytest.approx(duration)
+        assert len(regions) == 3
+        assert all(
+            left["end_seconds"] <= right["start_seconds"]
+            for left, right in zip(regions, regions[1:], strict=False)
+        )
 
-        assert body["clusters"]
+        assert len(body["clusters"]) == len(regions)
+        cluster_ids = {cluster["id"] for cluster in body["clusters"]}
+        assert {region["cluster"] for region in regions} == cluster_ids
+        assert body["clusters"][-1]["label"].startswith("Suggestion #1 · HR")
         for cluster in body["clusters"]:
             assert isinstance(cluster["label"], str) and cluster["label"]
             assert set(cluster["centroid"]) == {
-                "EA_mean", "EA_std", "HR_mean", "HR_std", "SA_mean", "SR_mean",
-                "SF_mean", "T1_mean", "TH_mean", "movement_energy", "rotation_energy",
-                "magnetic_energy",
+                "score",
+                "f_peak",
+                "cardio_peak",
+                "eda_peak",
+                "movement_peak",
+                "temperature_peak",
             }
+
+        limited = client.get(
+            f"/api/sessions/{session['id']}/biosignal-clusters", params={"clusters": 2}
+        ).json()
+        assert len(limited["windows"]) == 2
 
         assert client.get("/api/sessions/does-not-exist/biosignal-clusters").status_code == 404

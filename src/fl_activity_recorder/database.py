@@ -171,6 +171,30 @@ class Database:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS emotibit_one_running_per_session
                     ON emotibit_imports(session_id) WHERE status='running';
+                CREATE TABLE IF NOT EXISTS bookmarks (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    start_seconds REAL NOT NULL,
+                    end_seconds REAL NOT NULL,
+                    note TEXT NOT NULL,
+                    source_type TEXT NOT NULL CHECK(source_type IN ('manual','pattern')),
+                    pattern_context_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK(end_seconds > start_seconds)
+                );
+                CREATE INDEX IF NOT EXISTS bookmarks_session
+                    ON bookmarks(session_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS bookmark_labels (
+                    bookmark_id TEXT NOT NULL REFERENCES bookmarks(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL,
+                    label TEXT NOT NULL,
+                    normalized_label TEXT NOT NULL,
+                    PRIMARY KEY(bookmark_id, normalized_label),
+                    UNIQUE(bookmark_id, position)
+                );
+                CREATE INDEX IF NOT EXISTS bookmark_labels_search
+                    ON bookmark_labels(normalized_label);
                 """
             )
             columns = {
@@ -296,7 +320,9 @@ class Database:
         with self._lock:
             row = self._connection.execute(
                 """SELECT s.*,
-                          (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id) AS event_count
+                          (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id) AS event_count,
+                          (SELECT COUNT(*) FROM bookmarks b
+                           WHERE b.session_id=s.id) AS bookmark_count
                    FROM sessions s WHERE s.id=?""",
                 (session_id,),
             ).fetchone()
@@ -308,7 +334,9 @@ class Database:
         with self._lock:
             rows = self._connection.execute(
                 """SELECT s.*,
-                          (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id) AS event_count
+                          (SELECT COUNT(*) FROM events e WHERE e.session_id=s.id) AS event_count,
+                          (SELECT COUNT(*) FROM bookmarks b
+                           WHERE b.session_id=s.id) AS bookmark_count
                    FROM sessions s ORDER BY started_at DESC"""
             ).fetchall()
         return [dict(row) for row in rows]
@@ -373,6 +401,149 @@ class Database:
         with self.transaction() as connection:
             cursor = connection.execute("DELETE FROM sessions WHERE id=?", (session_id,))
         return bool(cursor.rowcount)
+
+    def create_bookmark(
+        self,
+        *,
+        session_id: str,
+        start_seconds: float,
+        end_seconds: float,
+        note: str,
+        source_type: str,
+        labels: list[str],
+        pattern_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        bookmark_id = str(uuid.uuid4())
+        timestamp = utc_now()
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO bookmarks
+                   (id, session_id, start_seconds, end_seconds, note, source_type,
+                    pattern_context_json, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    bookmark_id,
+                    session_id,
+                    start_seconds,
+                    end_seconds,
+                    note,
+                    source_type,
+                    json.dumps(pattern_context, ensure_ascii=False, separators=(",", ":"))
+                    if pattern_context is not None
+                    else None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._replace_bookmark_labels(connection, bookmark_id, labels)
+        return self.get_bookmark(bookmark_id)
+
+    def get_bookmark(self, bookmark_id: str) -> dict[str, Any]:
+        with self._lock:
+            row = self._connection.execute(
+                """SELECT b.*, s.project_title, s.started_at AS session_started_at,
+                          s.status AS session_status
+                   FROM bookmarks b JOIN sessions s ON s.id=b.session_id
+                   WHERE b.id=?""",
+                (bookmark_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(bookmark_id)
+            labels = self._bookmark_labels([bookmark_id]).get(bookmark_id, [])
+        return _decode_bookmark_row(row, labels)
+
+    def list_bookmarks(
+        self,
+        *,
+        search: str | None = None,
+        label: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        arguments: list[Any] = []
+        if session_id:
+            clauses.append("b.session_id=?")
+            arguments.append(session_id)
+        if label:
+            clauses.append(
+                """EXISTS (SELECT 1 FROM bookmark_labels selected_label
+                   WHERE selected_label.bookmark_id=b.id
+                     AND selected_label.normalized_label=?)"""
+            )
+            arguments.append(label.strip().casefold())
+        if search:
+            pattern = f"%{search.strip()}%"
+            clauses.append(
+                """(b.note LIKE ? COLLATE NOCASE OR s.project_title LIKE ? COLLATE NOCASE
+                   OR EXISTS (SELECT 1 FROM bookmark_labels search_label
+                              WHERE search_label.bookmark_id=b.id
+                                AND search_label.label LIKE ? COLLATE NOCASE))"""
+            )
+            arguments.extend([pattern, pattern, pattern])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock:
+            rows = self._connection.execute(
+                f"""SELECT b.*, s.project_title, s.started_at AS session_started_at,
+                            s.status AS session_status
+                     FROM bookmarks b JOIN sessions s ON s.id=b.session_id
+                     {where} ORDER BY b.updated_at DESC, b.created_at DESC""",
+                arguments,
+            ).fetchall()
+            labels = self._bookmark_labels([str(row["id"]) for row in rows])
+        return [_decode_bookmark_row(row, labels.get(str(row["id"]), [])) for row in rows]
+
+    def update_bookmark(
+        self, bookmark_id: str, *, note: str, labels: list[str]
+    ) -> dict[str, Any]:
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE bookmarks SET note=?, updated_at=? WHERE id=?",
+                (note, utc_now(), bookmark_id),
+            )
+            if not cursor.rowcount:
+                raise KeyError(bookmark_id)
+            self._replace_bookmark_labels(connection, bookmark_id, labels)
+        return self.get_bookmark(bookmark_id)
+
+    def delete_bookmark(self, bookmark_id: str) -> bool:
+        with self.transaction() as connection:
+            cursor = connection.execute("DELETE FROM bookmarks WHERE id=?", (bookmark_id,))
+        return bool(cursor.rowcount)
+
+    def list_bookmark_labels(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT MIN(label) AS label, normalized_label, COUNT(*) AS count
+                   FROM bookmark_labels GROUP BY normalized_label
+                   ORDER BY normalized_label"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _replace_bookmark_labels(
+        connection: sqlite3.Connection, bookmark_id: str, labels: list[str]
+    ) -> None:
+        connection.execute("DELETE FROM bookmark_labels WHERE bookmark_id=?", (bookmark_id,))
+        for position, label in enumerate(labels):
+            connection.execute(
+                """INSERT INTO bookmark_labels
+                   (bookmark_id, position, label, normalized_label) VALUES (?, ?, ?, ?)""",
+                (bookmark_id, position, label, label.casefold()),
+            )
+
+    def _bookmark_labels(self, bookmark_ids: list[str]) -> dict[str, list[str]]:
+        if not bookmark_ids:
+            return {}
+        placeholders = ",".join("?" for _ in bookmark_ids)
+        rows = self._connection.execute(
+            f"""SELECT bookmark_id, label FROM bookmark_labels
+                WHERE bookmark_id IN ({placeholders}) ORDER BY bookmark_id, position""",
+            bookmark_ids,
+        ).fetchall()
+        result: dict[str, list[str]] = {}
+        for row in rows:
+            result.setdefault(str(row["bookmark_id"]), []).append(str(row["label"]))
+        return result
 
     def add_event(
         self,
@@ -860,4 +1031,12 @@ class Database:
 def _decode_event_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     result["payload"] = json.loads(result.pop("payload_json"))
+    return result
+
+
+def _decode_bookmark_row(row: sqlite3.Row, labels: list[str]) -> dict[str, Any]:
+    result = dict(row)
+    raw_context = result.pop("pattern_context_json")
+    result["pattern_context"] = json.loads(raw_context) if raw_context is not None else None
+    result["labels"] = labels
     return result
