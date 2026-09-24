@@ -297,13 +297,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def biosignal_clusters(
         session_id: str,
         window_seconds: float | None = Query(default=None, ge=5.0, le=120.0),
-        clusters: int = Query(default=3, ge=2, le=6),
+        clusters: int = Query(default=10, ge=2, le=10),
     ) -> dict[str, Any]:
         """Return ranked, non-overlapping physiological pattern suggestions.
 
-        The scorer uses fixed per-modality windows. `window_seconds` remains a
-        compatibility parameter, while `clusters` can reduce the default top
-        three suggestions.
+        The scorer ranks at most one result per five-minute partition using
+        fixed per-modality windows. `window_seconds` remains a compatibility
+        parameter, while `clusters` can reduce the default top ten suggestions.
         """
         try:
             session = database.get_session(session_id)

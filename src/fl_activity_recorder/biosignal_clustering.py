@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from .live_signals import LiveSignalStore
 
@@ -13,6 +14,7 @@ EDA_TAG = "EA"
 TEMPERATURE_TAGS = ("T1", "TH")
 MOTION_TAGS = ("AX", "AY", "AZ", "GX", "GY", "GZ")
 ALL_SOURCE_TAGS = {CARDIO_TAG, EDA_TAG, *TEMPERATURE_TAGS, *MOTION_TAGS}
+FloatArray = NDArray[np.float64]
 
 PLAUSIBLE_RANGES: dict[str, tuple[float, float]] = {
     "HR": (30.0, 220.0),
@@ -21,11 +23,12 @@ PLAUSIBLE_RANGES: dict[str, tuple[float, float]] = {
 
 MIN_SAMPLE_COVERAGE_RATIO = 0.5
 MIN_WINDOW_SAMPLES = 2
-SUGGESTION_LIMIT = 3
+SUGGESTION_LIMIT = 10
+PARTITION_SECONDS = 300.0
 FUSION_SECONDS = 1.0
 PERCENTILE_THRESHOLD = 90.0
 SCORE_THRESHOLD = 2.0
-ALGORITHM_VERSION = "physiological-pattern-score-v2"
+ALGORITHM_VERSION = "physiological-pattern-score-v3"
 
 MODALITY_WEIGHTS = {"C": 0.30, "E": 0.30, "M": 0.25, "T": 0.15}
 MODALITY_LABELS = {
@@ -79,19 +82,40 @@ def compute_biosignal_clusters(
     duration_seconds: float,
     *,
     window_seconds: float | None = None,
-    n_clusters: int = 3,
+    n_clusters: int = SUGGESTION_LIMIT,
 ) -> dict[str, Any]:
-    """Return up to three robust, non-overlapping physiological suggestions.
+    """Return up to ten suggestions selected independently per five-minute partition.
 
     ``window_seconds`` remains accepted for wire compatibility, but the scoring
-    pipeline uses modality-specific fixed windows. ``n_clusters`` may reduce
-    the default three suggestions but cannot increase the design limit.
+    pipeline uses modality-specific fixed windows. Each partition contributes
+    at most one suggestion, and ``n_clusters`` controls the global result limit.
     """
     del window_seconds
     if duration_seconds <= 0:
         return {**EMPTY_RESULT, "algorithm_version": ALGORITHM_VERSION}
 
     series = _load_series(signals, session_id, duration_seconds)
+    partition_winners: list[IntervalScore] = []
+    partition_count = math.ceil(duration_seconds / PARTITION_SECONDS)
+    for index in range(partition_count):
+        partition_start = index * PARTITION_SECONDS
+        partition_end = min(partition_start + PARTITION_SECONDS, duration_seconds)
+        local_series = _slice_series(series, partition_start, partition_end)
+        local_candidates = _score_series(local_series, partition_end - partition_start)
+        local_winner = _select_non_overlapping(local_candidates, 1)
+        if local_winner:
+            partition_winners.append(_shift_interval(local_winner[0], partition_start))
+
+    selected = _select_non_overlapping(
+        partition_winners, min(SUGGESTION_LIMIT, max(0, n_clusters))
+    )
+    return _serialize_result(selected)
+
+
+def _score_series(
+    series: dict[str, tuple[FloatArray, FloatArray]], duration_seconds: float
+) -> list[IntervalScore]:
+    """Score every candidate within one partition-local signal collection."""
     modality_windows: dict[str, list[ScoredWindow]] = {}
 
     cardio = series.get(CARDIO_TAG)
@@ -141,19 +165,17 @@ def compute_biosignal_clusters(
         for segment in _candidate_segments(modality, windows)
     ]
     if not segments:
-        return {**EMPTY_RESULT, "algorithm_version": ALGORITHM_VERSION}
+        return []
 
     grid_times, envelopes, fused = _fuse_segments(segments, duration_seconds)
-    candidates = _score_intervals(segments, grid_times, envelopes, fused)
-    selected = _select_non_overlapping(candidates, min(SUGGESTION_LIMIT, max(0, n_clusters)))
-    return _serialize_result(selected)
+    return _score_intervals(segments, grid_times, envelopes, fused)
 
 
 def _load_series(
     signals: LiveSignalStore, session_id: str, duration_seconds: float
-) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+) -> dict[str, tuple[FloatArray, FloatArray]]:
     """Load and range-filter every source channel used by the scorer."""
-    series: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    series: dict[str, tuple[FloatArray, FloatArray]] = {}
     for tag in ALL_SOURCE_TAGS:
         try:
             result = signals.query(session_id, tag, 0.0, duration_seconds, pixels=1_000_000)
@@ -176,6 +198,30 @@ def _load_series(
     return series
 
 
+def _slice_series(
+    series: dict[str, tuple[FloatArray, FloatArray]], start: float, end: float
+) -> dict[str, tuple[FloatArray, FloatArray]]:
+    """Return one half-open partition with timestamps relative to its start."""
+    sliced: dict[str, tuple[FloatArray, FloatArray]] = {}
+    for tag, (times, values) in series.items():
+        mask = (times >= start) & (times < end)
+        if np.any(mask):
+            sliced[tag] = (times[mask] - start, values[mask])
+    return sliced
+
+
+def _shift_interval(interval: IntervalScore, offset: float) -> IntervalScore:
+    """Translate a partition-local interval back onto the session timeline."""
+    return IntervalScore(
+        start=interval.start + offset,
+        end=interval.end + offset,
+        score=interval.score,
+        sample_count=interval.sample_count,
+        fused_peak=interval.fused_peak,
+        modality_peaks=interval.modality_peaks,
+    )
+
+
 def _window_starts(duration_seconds: float, length: float, step: float) -> list[float]:
     """Return starts for complete fixed-width half-open windows."""
     if duration_seconds < length:
@@ -185,7 +231,7 @@ def _window_starts(duration_seconds: float, length: float, step: float) -> list[
 
 
 def _extract_features(
-    series: tuple[np.ndarray, np.ndarray],
+    series: tuple[FloatArray, FloatArray],
     duration_seconds: float,
     length: float,
     step: float,
@@ -221,7 +267,7 @@ def _extract_features(
     return windows
 
 
-def _linear_slope(times: np.ndarray, values: np.ndarray) -> float:
+def _linear_slope(times: FloatArray, values: FloatArray) -> float:
     """Calculate a least-squares slope against the actual sample timestamps."""
     centered_times = times - float(np.mean(times))
     denominator = float(np.dot(centered_times, centered_times))
@@ -231,7 +277,7 @@ def _linear_slope(times: np.ndarray, values: np.ndarray) -> float:
     return float(np.dot(centered_times, centered_values) / denominator)
 
 
-def _robust_z(values: np.ndarray) -> np.ndarray:
+def _robust_z(values: FloatArray) -> FloatArray:
     """Return median absolute deviation z-scores with finite zero fallback."""
     if values.size == 0:
         return np.asarray([], dtype="f8")
@@ -278,8 +324,8 @@ def _average_window_scores(channels: list[list[ScoredWindow]]) -> list[ScoredWin
 
 
 def _motion_energy_series(
-    series: dict[str, tuple[np.ndarray, np.ndarray]],
-) -> tuple[np.ndarray, np.ndarray] | None:
+    series: dict[str, tuple[FloatArray, FloatArray]],
+) -> tuple[FloatArray, FloatArray] | None:
     """Align six robust-standardized motion axes and return their RMS energy."""
     if any(tag not in series for tag in MOTION_TAGS):
         return None
@@ -344,29 +390,33 @@ def _candidate_segments(modality: str, windows: list[ScoredWindow]) -> list[Cand
 
 def _fuse_segments(
     segments: list[CandidateSegment], duration_seconds: float
-) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray]:
+) -> tuple[FloatArray, dict[str, FloatArray], FloatArray]:
     """Project modality envelopes onto one-second bins and calculate F(t)."""
-    grid_times = np.arange(0.0, duration_seconds, FUSION_SECONDS, dtype="f8")
-    envelopes = {name: np.zeros(grid_times.shape, dtype="f8") for name in MODALITY_WEIGHTS}
+    grid_times: FloatArray = np.arange(
+        0.0, duration_seconds, FUSION_SECONDS, dtype=np.float64
+    )
+    envelopes: dict[str, FloatArray] = {
+        name: np.zeros(grid_times.shape, dtype=np.float64) for name in MODALITY_WEIGHTS
+    }
     for segment in segments:
         mask = (grid_times >= segment.start) & (grid_times < segment.end)
         envelopes[segment.modality][mask] = np.maximum(
             envelopes[segment.modality][mask], segment.strength
         )
     active_count = np.zeros(grid_times.shape, dtype="i4")
-    weighted = np.zeros(grid_times.shape, dtype="f8")
+    weighted: FloatArray = np.zeros(grid_times.shape, dtype=np.float64)
     for name, weight in MODALITY_WEIGHTS.items():
         active_count += (envelopes[name] > 0).astype("i4")
         weighted += weight * envelopes[name]
-    fused = (0.8 + 0.2 * active_count) * weighted
+    fused: FloatArray = (0.8 + 0.2 * active_count) * weighted
     return grid_times, envelopes, fused
 
 
 def _score_intervals(
     segments: list[CandidateSegment],
-    grid_times: np.ndarray,
-    envelopes: dict[str, np.ndarray],
-    fused: np.ndarray,
+    grid_times: FloatArray,
+    envelopes: dict[str, FloatArray],
+    fused: FloatArray,
 ) -> list[IntervalScore]:
     """Score every distinct post-dedup candidate interval from the fused signal."""
     candidates: list[IntervalScore] = []
