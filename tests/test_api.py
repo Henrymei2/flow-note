@@ -663,12 +663,12 @@ def test_biosignal_clusters_return_ranked_non_overlapping_suggestions(tmp_path: 
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["algorithm_version"] == "physiological-pattern-score-v2"
+        assert body["algorithm_version"] == "physiological-pattern-score-v3"
         assert body["window_seconds"] == 1.0
 
         regions = body["windows"]
         assert regions == sorted(regions, key=lambda w: w["start_seconds"])
-        assert len(regions) == 3
+        assert len(regions) == 1
         assert all(
             left["end_seconds"] <= right["start_seconds"]
             for left, right in zip(regions, regions[1:], strict=False)
@@ -692,6 +692,22 @@ def test_biosignal_clusters_return_ranked_non_overlapping_suggestions(tmp_path: 
         limited = client.get(
             f"/api/sessions/{session['id']}/biosignal-clusters", params={"clusters": 2}
         ).json()
-        assert len(limited["windows"]) == 2
+        assert len(limited["windows"]) == 1
+
+        maximum = client.get(
+            f"/api/sessions/{session['id']}/biosignal-clusters", params={"clusters": 10}
+        )
+        assert maximum.status_code == 200
+        maximum_windows = maximum.json()["windows"]
+        assert len(maximum_windows) == 1
+
+        default = client.get(f"/api/sessions/{session['id']}/biosignal-clusters")
+        assert default.status_code == 200
+        assert default.json()["windows"] == maximum_windows
+
+        above_maximum = client.get(
+            f"/api/sessions/{session['id']}/biosignal-clusters", params={"clusters": 11}
+        )
+        assert above_maximum.status_code == 422
 
         assert client.get("/api/sessions/does-not-exist/biosignal-clusters").status_code == 404
