@@ -12,8 +12,7 @@ from .live_signals import LiveSignalStore
 CARDIO_TAG = "HR"
 EDA_TAG = "EA"
 TEMPERATURE_TAGS = ("T1", "TH")
-MOTION_TAGS = ("AX", "AY", "AZ", "GX", "GY", "GZ")
-ALL_SOURCE_TAGS = {CARDIO_TAG, EDA_TAG, *TEMPERATURE_TAGS, *MOTION_TAGS}
+ALL_SOURCE_TAGS = {CARDIO_TAG, EDA_TAG, *TEMPERATURE_TAGS}
 FloatArray = NDArray[np.float64]
 
 PLAUSIBLE_RANGES: dict[str, tuple[float, float]] = {
@@ -28,13 +27,12 @@ PARTITION_SECONDS = 300.0
 FUSION_SECONDS = 1.0
 PERCENTILE_THRESHOLD = 90.0
 SCORE_THRESHOLD = 2.0
-ALGORITHM_VERSION = "physiological-pattern-score-v3"
+ALGORITHM_VERSION = "physiological-pattern-score-v4"
 
-MODALITY_WEIGHTS = {"C": 0.30, "E": 0.30, "M": 0.25, "T": 0.15}
+MODALITY_WEIGHTS = {"C": 0.40, "E": 0.40, "T": 0.20}
 MODALITY_LABELS = {
     "C": "HR",
     "E": "EDA",
-    "M": "Movement",
     "T": "Temperature",
 }
 
@@ -149,15 +147,6 @@ def _score_series(
         )
     if temperature_channels:
         modality_windows["T"] = _average_window_scores(temperature_channels)
-
-    motion_energy = _motion_energy_series(series)
-    if motion_energy is not None:
-        features = _extract_features(
-            motion_energy, duration_seconds, 5.0, 2.0, ("median", "delta")
-        )
-        modality_windows["M"] = _score_feature_windows(
-            features, {"median": 0.5, "delta": 0.5}
-        )
 
     segments = [
         segment
@@ -323,27 +312,6 @@ def _average_window_scores(channels: list[list[ScoredWindow]]) -> list[ScoredWin
     ]
 
 
-def _motion_energy_series(
-    series: dict[str, tuple[FloatArray, FloatArray]],
-) -> tuple[FloatArray, FloatArray] | None:
-    """Align six robust-standardized motion axes and return their RMS energy."""
-    if any(tag not in series for tag in MOTION_TAGS):
-        return None
-    common_times = series[MOTION_TAGS[0]][0]
-    for tag in MOTION_TAGS[1:]:
-        common_times = np.intersect1d(common_times, series[tag][0], assume_unique=False)
-    if common_times.size < MIN_WINDOW_SAMPLES:
-        return None
-    axes = []
-    for tag in MOTION_TAGS:
-        times, values = series[tag]
-        indices = np.searchsorted(times, common_times)
-        axes.append(_robust_z(values)[indices])
-    matrix = np.vstack(axes)
-    energy = np.sqrt(np.mean(np.square(matrix), axis=0))
-    return common_times, energy
-
-
 def _candidate_segments(modality: str, windows: list[ScoredWindow]) -> list[CandidateSegment]:
     """Convert qualifying overlapping windows into a maximum-strength envelope."""
     if not windows:
@@ -487,7 +455,9 @@ def _serialize_result(selected: list[IntervalScore]) -> dict[str, Any]:
                     "f_peak": item.fused_peak,
                     "cardio_peak": item.modality_peaks["C"],
                     "eda_peak": item.modality_peaks["E"],
-                    "movement_peak": item.modality_peaks["M"],
+                    # Retain the legacy field for frontend compatibility. Movement is
+                    # no longer loaded or scored by this algorithm version.
+                    "movement_peak": 0.0,
                     "temperature_peak": item.modality_peaks["T"],
                 },
                 "label": (

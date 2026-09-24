@@ -663,7 +663,7 @@ def test_biosignal_clusters_return_ranked_non_overlapping_suggestions(tmp_path: 
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["algorithm_version"] == "physiological-pattern-score-v3"
+        assert body["algorithm_version"] == "physiological-pattern-score-v4"
         assert body["window_seconds"] == 1.0
 
         regions = body["windows"]
