@@ -330,6 +330,16 @@ class Database:
             raise KeyError(session_id)
         return dict(row)
 
+    def rename_session(self, session_id: str, project_title: str | None) -> dict[str, Any]:
+        """Set a session's display title, or clear it (None) to fall back to its default."""
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE sessions SET project_title=? WHERE id=?", (project_title, session_id)
+            )
+            if not cursor.rowcount:
+                raise KeyError(session_id)
+        return self.get_session(session_id)
+
     def list_sessions(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._connection.execute(

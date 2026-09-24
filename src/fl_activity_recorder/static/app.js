@@ -1,5 +1,19 @@
-const state = { health: null, sharing: null, sessions: [], cloudSessions: [], bookmarks: [], bookmarkLabels: [], selectedBookmark: null, selectedInterval: null, focusWindow: null, selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clusterMeta: null, clustersVisible: true, patternFilter: null, collapsedTracks: new Set() };
+const state = { health: null, sharing: null, sessions: [], cloudSessions: [], bookmarks: [], bookmarkLabels: [], selectedBookmark: null, selectedInterval: null, focusWindow: null, selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clusterMeta: null, clustersVisible: true, patternFilter: null, collapsedTracks: new Set(), selectedTrackTags: null };
 const $ = (id) => document.getElementById(id);
+
+function showWorkspaceView() {
+  const requested = location.hash.slice(1);
+  const view = ["sessions", "review", "notebook"].includes(requested) ? requested : "sessions";
+  for (const name of ["sessions", "review", "notebook"]) $(`${name}-view`).hidden = name !== view;
+  document.querySelectorAll("[data-view-link]").forEach((link) => {
+    if (link.dataset.viewLink === view) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  if (view !== "review") $("session-video").pause();
+  if (view === "review" && state.timeline) requestAnimationFrame(drawSignals);
+}
+window.addEventListener("hashchange", showWorkspaceView);
+showWorkspaceView();
 
 async function request(url, options = {}) {
   const response = await fetch(url, options);
@@ -29,12 +43,16 @@ function formatDate(value) { return value ? new Intl.DateTimeFormat(undefined, {
 function formatTime(seconds) { const value = Math.max(0, Number(seconds) || 0); return `${String(Math.floor(value / 60)).padStart(2, "0")}:${(value % 60).toFixed(3).padStart(6, "0")}`; }
 function formatBytes(bytes) { const value = Math.max(0, Number(bytes) || 0); if (value < 1024) return `${value} B`; const units = ["KB", "MB", "GB", "TB"]; let amount = value / 1024, index = 0; while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; } return `${amount.toFixed(amount >= 10 ? 0 : 1)} ${units[index]}`; }
 function sessionDuration(session) { return Math.max(0, (session.timeline_end_lsl || session.timeline_zero_lsl || 0) - (session.timeline_zero_lsl || 0)); }
+// Untitled sessions default to a time-based name (rather than a static
+// "Untitled project" label) so the list stays distinguishable at a glance;
+// the user can still rename any session from the review page.
+function defaultSessionTitle(session) { return session.project_title || `Session – ${formatDate(session.started_at)}`; }
 
 function renderSessions() {
   const list = $("session-list"); list.replaceChildren(); $("sessions-empty").hidden = state.sessions.length > 0;
   for (const session of state.sessions) {
     const button = document.createElement("button"); button.className = `session-item ${state.selected?.id === session.id ? "active" : ""}`;
-    const title = document.createElement("strong"); title.textContent = session.project_title || "Untitled project";
+    const title = document.createElement("strong"); title.textContent = defaultSessionTitle(session);
     const detail = document.createElement("span"); detail.textContent = `${formatDate(session.started_at)} · ${session.event_count} events · ${session.bookmark_count || 0} bookmarks`;
     button.append(title, detail); button.addEventListener("click", () => selectSession(session)); list.append(button);
   }
@@ -47,10 +65,12 @@ function renderBookmarks() {
   for (const bookmark of state.bookmarks) {
     const button = document.createElement("button"); button.className = `bookmark-card ${state.selectedBookmark?.id === bookmark.id ? "active" : ""}`;
     const note = document.createElement("strong"); note.textContent = bookmark.note;
-    const detail = document.createElement("small"); detail.textContent = `${bookmark.source_type === "pattern" ? "Pattern · " : ""}${bookmark.project_title || "Untitled project"} · ${formatTime(bookmark.start_seconds)}–${formatTime(bookmark.end_seconds)}`;
+    const bookmarkSessionTitle = bookmark.project_title || `Session – ${formatDate(bookmark.session_started_at)}`;
+    const detail = document.createElement("small"); detail.textContent = `${bookmark.source_type === "pattern" ? "Pattern · " : ""}${bookmarkSessionTitle} · ${formatTime(bookmark.start_seconds)}–${formatTime(bookmark.end_seconds)}`;
     const tags = document.createElement("div"); tags.className = "bookmark-tags";
     bookmark.labels.forEach((label) => { const tag = document.createElement("span"); tag.textContent = label; tags.append(tag); });
-    button.append(note, detail, tags); button.addEventListener("click", () => openBookmark(bookmark)); list.append(button);
+    const action = document.createElement("span"); action.className = "bookmark-open"; action.textContent = "Open in session review →";
+    button.append(note, detail, tags, action); button.addEventListener("click", () => openBookmark(bookmark)); list.append(button);
   }
 }
 
@@ -65,7 +85,7 @@ function renderCloudSessions(message = "") {
   const list = $("cloud-session-list"); const empty = $("cloud-sessions-empty"); list.replaceChildren(); empty.hidden = state.cloudSessions.length > 0; empty.textContent = message || (state.sharing?.configured ? "No sessions have been uploaded yet." : "Cloud sharing is not configured on this device.");
   for (const session of state.cloudSessions) {
     const link = document.createElement("a"); link.className = "session-item cloud"; link.href = `/api/cloud-sessions/download?key=${encodeURIComponent(session.archive_key)}`;
-    const title = document.createElement("strong"); title.textContent = session.project_title || "Untitled project";
+    const title = document.createElement("strong"); title.textContent = defaultSessionTitle(session);
     const detail = document.createElement("span"); detail.textContent = `${formatDate(session.started_at)} · ${session.event_count} events · ${formatBytes(session.size_bytes)}`;
     link.append(title, detail); list.append(link);
   }
@@ -74,8 +94,17 @@ function renderCloudSessions(message = "") {
 function renderSelected() {
   const session = state.detail || state.selected; const shareable = session && session.status !== "recording"; const cloudReady = shareable && state.sharing?.configured; $("event-export-button").classList.toggle("disabled", !session); $("share-button").classList.toggle("disabled", !shareable); $("cloud-share-button").disabled = !cloudReady; $("cloud-share-button").classList.toggle("disabled", !cloudReady); $("share-button").title = shareable ? "Download all available FL Studio, video, and physiology data" : "Stop the recording before sharing it"; $("cloud-share-button").title = !state.sharing?.configured ? "Add Cloudflare R2 credentials to enable private links" : $("share-button").title;
   $("delete-button").disabled = !session || session.status === "recording"; $("review-panel").hidden = !session;
-  if (!session) return;
-  $("session-status").textContent = session.status.toUpperCase(); $("session-title").textContent = session.project_title || "Untitled project";
+  document.querySelector(".filters").hidden = !session;
+  document.querySelector(".timeline").hidden = !session;
+  $("session-title-edit").hidden = !session || session.status === "recording";
+  if (!session) {
+    $("session-status").textContent = "NO SESSION OPEN";
+    $("session-title").textContent = "Open a session to begin";
+    $("session-time").textContent = "Go to Sessions to choose a recording. Your saved moments are in Notebook.";
+    $("session-video").pause();
+    return;
+  }
+  $("session-status").textContent = session.status.toUpperCase(); $("session-title").textContent = defaultSessionTitle(session);
   $("session-time").textContent = `${formatDate(session.started_at)} · ${session.event_count} timeline events`; $("event-export-button").href = `/api/sessions/${session.id}/export`; $("share-button").href = `/api/sessions/${session.id}/share`;
   if (!state.detail) return;
   const statuses = [["FL events", "ready"], ["Video", session.video_status], ["EmotiBit", session.emotibit_status], ["Sync", session.sync_quality]];
@@ -105,18 +134,33 @@ function renderEvents() {
   }
 }
 
+// Selected tracks are chips the user can remove, plus a single "+ Add track"
+// dropdown for the rest, instead of a wall of checkboxes for every stream
+// (most sessions only care about 3-4 of the dozen or so available signals).
 function renderTrackPicker() {
-  const picker = $("track-picker"); const selected = new Set(selectedTracks()); picker.replaceChildren();
+  const picker = $("track-picker"); picker.replaceChildren();
   const recording = state.detail?.status === "recording"; const streams = recording ? state.liveDescriptors.map((item) => ({ type_tag: item.track_id, display_name: item.display_name, group_name: item.group_name, unit: item.unit })) : state.detail?.signals || [];
+  if (state.selectedTrackTags === null) state.selectedTrackTags = new Set(streams.filter((item) => ["EDA", "Heart", "Temperature"].includes(item.group_name)).map((item) => item.type_tag));
+  const known = new Set(streams.map((item) => item.type_tag));
+  for (const tag of state.selectedTrackTags) if (!known.has(tag)) state.selectedTrackTags.delete(tag);
   for (const stream of streams) {
-    const label = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.value = stream.type_tag;
-    input.checked = selected.has(stream.type_tag) || (!selected.size && ["EDA", "Heart", "Temperature"].includes(stream.group_name)); input.addEventListener("change", recording ? renderLiveSignals : loadTimeline);
-    label.append(input, document.createTextNode(`${stream.display_name}${stream.unit ? ` (${stream.unit})` : ""}`)); picker.append(label);
+    if (!state.selectedTrackTags.has(stream.type_tag)) continue;
+    const chip = document.createElement("span"); chip.className = "track-chip";
+    chip.append(document.createTextNode(`${stream.display_name}${stream.unit ? ` (${stream.unit})` : ""}`));
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "track-chip-remove"; remove.setAttribute("aria-label", `Remove ${stream.display_name}`); remove.textContent = "×";
+    remove.addEventListener("click", () => { state.selectedTrackTags.delete(stream.type_tag); renderTrackPicker(); });
+    chip.append(remove); picker.append(chip);
   }
+  const remaining = streams.filter((item) => !state.selectedTrackTags.has(item.type_tag));
+  const adder = document.createElement("select"); adder.className = "track-adder"; adder.disabled = remaining.length === 0;
+  adder.append(new Option(remaining.length ? "+ Add track" : "All tracks added", ""));
+  for (const stream of remaining) adder.append(new Option(`${stream.display_name}${stream.unit ? ` (${stream.unit})` : ""}`, stream.type_tag));
+  adder.addEventListener("change", () => { if (!adder.value) return; state.selectedTrackTags.add(adder.value); renderTrackPicker(); });
+  picker.append(adder);
   recording ? renderLiveSignals() : loadTimeline();
 }
 
-function selectedTracks() { return [...$("track-picker").querySelectorAll("input:checked")].map((input) => input.value); }
+function selectedTracks() { return [...(state.selectedTrackTags || [])]; }
 
 // The zoom slider is a continuous exponential control (like a video editor's
 // timeline zoom), not a handful of fixed presets: each whole step doubles how
@@ -153,25 +197,39 @@ function renderLiveSignals() {
   state.timeline = { start, end: Math.max(start + 0.001, end), events: state.events.filter((event) => event.timeline_seconds >= start), signals: tracks.map((type_tag) => ({ type_tag, mode: "raw", points: state.liveBuffers.get(type_tag) || [] })) }; drawSignals(); seekTimeline(end);
 }
 
+// Each signal group gets a fixed accent (from the existing palette, not new
+// colors) so tracks read as distinct lanes at a glance, the way a video
+// editor color-codes audio/video/text tracks.
+const TRACK_GROUP_COLOR = { EDA: "--blue", PPG: "--purple", Temperature: "--yellow", Heart: "--red", Motion: "--green" };
+function trackColor(groupName) {
+  const name = TRACK_GROUP_COLOR[groupName] || "--orange";
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 function drawSignals() {
   const box = $("signal-tracks"); box.replaceChildren(); if (!state.timeline) return;
   const span = state.timeline.end - state.timeline.start;
   for (const signal of state.timeline.signals) {
-    const stream = state.detail.signals.find((item) => item.type_tag === signal.type_tag); const name = stream?.display_name || signal.type_tag;
+    const stream = state.detail.signals.find((item) => item.type_tag === signal.type_tag)
+      || state.liveDescriptors.find((item) => item.track_id === signal.type_tag);
+    const name = stream?.display_name || signal.type_tag; const color = trackColor(stream?.group_name);
     const collapsed = state.collapsedTracks.has(signal.type_tag);
     const row = document.createElement("div"); row.className = `signal-track${collapsed ? " collapsed" : ""}`;
+    row.style.setProperty("--track-color", color);
     const label = document.createElement("button"); label.type = "button"; label.className = "lane-label lane-toggle"; label.setAttribute("aria-expanded", String(!collapsed));
     const chevron = document.createElement("span"); chevron.className = "lane-chevron"; chevron.setAttribute("aria-hidden", "true");
-    label.append(chevron, document.createTextNode(name));
+    const dot = document.createElement("span"); dot.className = "lane-dot"; dot.style.background = color;
+    label.append(chevron, dot, document.createTextNode(name));
     label.addEventListener("click", () => {
       const next = !state.collapsedTracks.has(signal.type_tag);
       if (next) state.collapsedTracks.add(signal.type_tag); else state.collapsedTracks.delete(signal.type_tag);
       row.classList.toggle("collapsed", next); label.setAttribute("aria-expanded", String(!next));
     });
     const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 72;
-    drawSignal(canvas, signal); enableIntervalDrag(canvas);
+    drawSignal(canvas, signal, color); enableIntervalDrag(canvas);
     row.append(label, canvas); box.append(row);
   }
+  drawTimelineGrid(span);
   const ruler = $("event-ruler"); ruler.replaceChildren();
   for (const event of state.timeline.events) { const marker = document.createElement("button"); marker.className = "event-marker"; marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`; marker.title = `${formatTime(event.timeline_seconds)} · ${event.summary}`; marker.addEventListener("click", (event_) => { event_.stopPropagation(); seekTimeline(event.timeline_seconds); }); ruler.append(marker); }
   enableIntervalDrag(ruler);
@@ -189,6 +247,19 @@ function drawTimelineRuler(span) {
   for (let time = first; time <= state.timeline.end + 0.0001; time += step) {
     const tick = document.createElement("div"); tick.className = "ruler-tick"; tick.style.left = `${(time - state.timeline.start) / span * 100}%`;
     const label = document.createElement("span"); label.textContent = formatTime(time); tick.append(label); ruler.append(tick);
+  }
+}
+
+// A grid line under every ruler tick, running the full height of the stack
+// (not just the ruler row), so zooming in/out reads as an obvious change in
+// line spacing across every lane at once, not just in the thin ruler.
+function drawTimelineGrid(span) {
+  const grid = $("timeline-grid"); grid.replaceChildren(); if (!state.timeline || span <= 0) return;
+  const step = niceRulerStep(span / 6); const first = Math.ceil(state.timeline.start / step) * step;
+  const { left, width } = timelineContentBox();
+  for (let time = first; time <= state.timeline.end + 0.0001; time += step) {
+    const line = document.createElement("div"); line.className = "grid-line";
+    line.style.left = `${left + (time - state.timeline.start) / span * width}px`; grid.append(line);
   }
 }
 
@@ -284,7 +355,8 @@ function renderClusterLegend() {
   legend.hidden = entries.length === 0;
   const total = state.clusterLegend.length;
   for (const item of entries) {
-    const chip = document.createElement("span"); chip.className = "cluster-chip";
+    const chip = document.createElement("button"); chip.type = "button"; chip.className = "cluster-chip";
+    chip.addEventListener("click", () => { const interval = state.clusters.find((window) => window.cluster === item.id); if (interval) applyPatternFilter(interval); });
     const dot = document.createElement("i"); dot.style.background = clusterColor(item.id, total);
     chip.append(dot, document.createTextNode(item.label)); legend.append(chip);
   }
@@ -314,19 +386,74 @@ for (const button of document.querySelectorAll(".lane-toggle")) {
   });
 }
 
-function drawSignal(canvas, signal) {
+function drawSignal(canvas, signal, color) {
   const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return; const values = points.flatMap((point) => point.slice(1));
   const min = Math.min(...values), max = Math.max(...values), span = max - min || 1; const x = (time) => (time - state.timeline.start) / (state.timeline.end - state.timeline.start) * canvas.width; const y = (value) => canvas.height - 4 - (value - min) / span * (canvas.height - 8);
-  ctx.strokeStyle = "#ff7a1a"; ctx.lineWidth = 1; ctx.beginPath();
+  ctx.strokeStyle = color || getComputedStyle(document.documentElement).getPropertyValue("--text").trim(); ctx.lineWidth = 1.25; ctx.beginPath();
   if (signal.mode === "raw") points.forEach((point, index) => index ? ctx.lineTo(x(point[0]), y(point[1])) : ctx.moveTo(x(point[0]), y(point[1]))); else points.forEach((point) => { ctx.moveTo(x(point[0]), y(point[1])); ctx.lineTo(x(point[0]), y(point[2])); }); ctx.stroke();
 }
 
 function pointerTime(event, element) { const rect = element.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); return state.timeline.start + ratio * (state.timeline.end - state.timeline.start); }
+
+// A live dashed preview box (with a running duration readout) follows the
+// pointer while dragging, instead of the selection only appearing once the
+// mouse is released — dragging a precise interval was otherwise a guessing
+// game with no feedback until you let go.
+function showDragPreview(start, end) {
+  const { left, width } = timelineContentBox(); const span = state.timeline.end - state.timeline.start;
+  const preview = $("timeline-drag-preview"); preview.hidden = false;
+  preview.style.left = `${left + (start - state.timeline.start) / span * width}px`;
+  preview.style.width = `${Math.max(1, (end - start) / span * width)}px`;
+  $("drag-duration").textContent = `${(end - start).toFixed(1)}s`;
+}
+function hideDragPreview() { $("timeline-drag-preview").hidden = true; }
+
 function enableIntervalDrag(element) {
   let anchor = null;
   element.addEventListener("pointerdown", (event) => { if (!state.detail || state.detail.status === "recording") return; anchor = pointerTime(event, element); element.setPointerCapture?.(event.pointerId); });
-  element.addEventListener("pointerup", (event) => { if (anchor == null) return; const current = pointerTime(event, element); const start = Math.min(anchor, current); const end = Math.max(anchor, current); anchor = null; if (end - start < 0.05) { seekTimeline(current); return; } selectInterval({ start, end, sourceType: "manual", label: "Manual selection", patternContext: null }); });
+  element.addEventListener("pointermove", (event) => { if (anchor == null) return; const current = pointerTime(event, element); showDragPreview(Math.min(anchor, current), Math.max(anchor, current)); });
+  element.addEventListener("pointerup", (event) => { if (anchor == null) return; const current = pointerTime(event, element); const start = Math.min(anchor, current); const end = Math.max(anchor, current); anchor = null; hideDragPreview(); if (end - start < 0.05) { seekTimeline(current); return; } selectInterval({ start, end, sourceType: "manual", label: "Manual selection", patternContext: null }); });
+  element.addEventListener("pointercancel", () => { anchor = null; hideDragPreview(); });
 }
+
+// Once an interval is selected, its edges become draggable handles so a
+// slightly-off selection can be nudged into place instead of redrawn from
+// scratch. Disabled while viewing an already-saved bookmark, matching the
+// start/end number inputs (also disabled there).
+function enableSelectionResize() {
+  for (const handle of document.querySelectorAll(".selection-handle")) {
+    handle.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+      if (!state.selectedInterval || !state.timeline || state.selectedBookmark) return;
+      handle.setPointerCapture?.(event.pointerId); const edge = handle.dataset.edge;
+      const onMove = (moveEvent) => {
+        const time = pointerTime(moveEvent, $("timeline-ruler")); const interval = state.selectedInterval;
+        let { start, end } = interval;
+        if (edge === "start") start = Math.max(0, Math.min(time, end - 0.05)); else end = Math.max(time, start + 0.05);
+        state.selectedInterval = { ...interval, start, end }; updateTimelineSelection();
+        $("annotation-start").value = start.toFixed(3); $("annotation-end").value = end.toFixed(3); updateDurationDisplay();
+      };
+      const onUp = () => { handle.removeEventListener("pointermove", onMove); selectInterval(state.selectedInterval); };
+      handle.addEventListener("pointermove", onMove); handle.addEventListener("pointerup", onUp, { once: true });
+    });
+  }
+}
+enableSelectionResize();
+
+// Scroll-to-zoom on the timeline, centered on whatever time is under the
+// cursor (not the playhead), the way a video editor or map lets you zoom
+// toward the thing you're pointing at instead of always toward the middle.
+let wheelZoomTimer;
+$("timeline-stack").addEventListener("wheel", (event) => {
+  if (!state.timeline || !state.detail || state.detail.status === "recording") return;
+  event.preventDefault();
+  const zoom = $("zoom"); const next = Math.min(Number(zoom.max), Math.max(Number(zoom.min), Number(zoom.value) + (event.deltaY < 0 ? 0.5 : -0.5)));
+  if (next === Number(zoom.value)) return; zoom.value = next; updateZoomLabel();
+  const center = pointerTime(event, $("timeline-ruler")); const duration = Math.max(1, sessionDuration(state.detail)); const width = duration / zoomFactor();
+  const end = Math.min(duration, Math.max(width, center + width / 2)); const start = Math.max(0, end - width);
+  state.focusWindow = { start, end: Math.min(duration, start + width) };
+  clearTimeout(wheelZoomTimer); wheelZoomTimer = setTimeout(loadTimeline, 60);
+}, { passive: false });
 
 function selectInterval(interval, bookmark = null) {
   const duration = sessionDuration(state.detail); const start = Math.max(0, Math.min(duration, Number(interval.start))); const end = Math.max(start, Math.min(duration, Number(interval.end)));
@@ -336,35 +463,92 @@ function selectInterval(interval, bookmark = null) {
 
 function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.patternFilter = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderEvents(); renderBookmarks(); loadTimeline(); }
 
+function updateDurationDisplay() {
+  const start = Number($("annotation-start").value), end = Number($("annotation-end").value);
+  $("annotation-duration").innerHTML = Number.isFinite(start) && Number.isFinite(end) && end > start ? `<strong>${(end - start).toFixed(1)}s</strong> selected` : "";
+}
+
+// Frequently-used labels render as one-click toggle chips (from the existing
+// label vocabulary in Notebook) so tagging a moment usually means clicking,
+// not retyping a label you already coined for an earlier one.
+function renderLabelSuggestions() {
+  const box = $("label-suggestions"); box.replaceChildren();
+  const current = new Set(labelsFromInput());
+  for (const item of state.bookmarkLabels.slice(0, 12)) {
+    const chip = document.createElement("button"); chip.type = "button"; chip.className = `label-suggestion${current.has(item.label) ? " active" : ""}`;
+    chip.textContent = item.label;
+    chip.addEventListener("click", () => {
+      const labels = labelsFromInput(); const index = labels.indexOf(item.label);
+      if (index === -1) labels.push(item.label); else labels.splice(index, 1);
+      $("annotation-labels").value = labels.join(", "); renderLabelSuggestions();
+    });
+    box.append(chip);
+  }
+}
+
 function renderComposer(bookmark = null) {
   const interval = state.selectedInterval; if (!interval) { $("annotation-composer").hidden = true; return; }
+  const wasHidden = $("annotation-composer").hidden;
   $("annotation-composer").hidden = false; $("annotation-origin").textContent = interval.sourceType === "pattern" ? "PATTERN SUGGESTION" : "MANUAL INTERVAL";
-  $("annotation-title").textContent = bookmark ? "Edit bookmark" : "Annotate this moment";
+  $("annotation-title").textContent = bookmark ? "Edit saved moment" : "Annotate this moment";
   $("annotation-context").textContent = `${interval.label || "Selected interval"} · ${formatTime(interval.start)}–${formatTime(interval.end)}`;
   $("annotation-start").value = interval.start.toFixed(3); $("annotation-end").value = interval.end.toFixed(3);
   $("annotation-start").disabled = Boolean(bookmark); $("annotation-end").disabled = Boolean(bookmark);
+  updateDurationDisplay();
   $("annotation-note").value = bookmark?.note || ""; $("annotation-labels").value = bookmark?.labels.join(", ") || "";
-  $("annotation-save").textContent = bookmark ? "Save changes" : "Save bookmark"; $("annotation-delete").hidden = !bookmark;
+  renderLabelSuggestions();
+  $("annotation-save").textContent = bookmark ? "Save changes" : "Save to Notebook"; $("annotation-delete").hidden = !bookmark;
+  if (wasHidden) {
+    $("annotation-composer").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    $("annotation-note").focus();
+  }
 }
 
 function labelsFromInput() { return $("annotation-labels").value.split(",").map((item) => item.trim()).filter(Boolean); }
+
+// Sessions default to a time-based name (see defaultSessionTitle) but the
+// title is a click-to-edit field: clicking the pencil swaps the heading for
+// a text input; Enter/blur commits, Escape reverts without saving.
+let cancellingTitleEdit = false;
+function startTitleEdit() {
+  const session = state.detail || state.selected; if (!session || session.status === "recording") return;
+  const input = $("session-title-input"); input.value = defaultSessionTitle(session);
+  $("session-title").hidden = true; $("session-title-edit").hidden = true; input.hidden = false;
+  input.focus(); input.select();
+}
+function cancelTitleEdit() {
+  cancellingTitleEdit = true; $("session-title-input").hidden = true; $("session-title").hidden = false;
+  renderSelected(); cancellingTitleEdit = false;
+}
+async function commitTitleEdit() {
+  if (cancellingTitleEdit) return;
+  const session = state.detail || state.selected; const value = $("session-title-input").value.trim();
+  $("session-title-input").hidden = true; $("session-title").hidden = false;
+  if (!session || value === defaultSessionTitle(session)) { renderSelected(); return; }
+  try {
+    const updated = await request(`/api/sessions/${session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_title: value }) });
+    if (state.detail?.id === updated.id) state.detail = { ...state.detail, project_title: updated.project_title };
+    if (state.selected?.id === updated.id) state.selected = { ...state.selected, project_title: updated.project_title };
+    renderSelected(); renderSessions(); toast("Session renamed");
+  } catch (error) { toast(error.message); renderSelected(); }
+}
 
 async function saveAnnotation(event) {
   event.preventDefault(); if (!state.detail || !state.selectedInterval) return;
   const note = $("annotation-note").value; const labels = labelsFromInput();
   try {
     if (state.selectedBookmark) {
-      const updated = await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, labels }) }); state.selectedBookmark = updated; state.selectedInterval.label = updated.pattern_context?.label || "Saved bookmark"; toast("Bookmark updated");
+      const updated = await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, labels }) }); state.selectedBookmark = updated; state.selectedInterval.label = updated.pattern_context?.label || "Saved bookmark"; toast("Saved moment updated");
     } else {
-      const interval = state.selectedInterval; const created = await request("/api/bookmarks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: state.detail.id, start_seconds: Number($("annotation-start").value), end_seconds: Number($("annotation-end").value), note, labels, source_type: interval.sourceType, pattern_context: interval.patternContext }) }); state.selectedBookmark = created; state.selectedInterval.start = created.start_seconds; state.selectedInterval.end = created.end_seconds; toast("Bookmark saved");
+      const interval = state.selectedInterval; const created = await request("/api/bookmarks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: state.detail.id, start_seconds: Number($("annotation-start").value), end_seconds: Number($("annotation-end").value), note, labels, source_type: interval.sourceType, pattern_context: interval.patternContext }) }); state.selectedBookmark = created; state.selectedInterval.start = created.start_seconds; state.selectedInterval.end = created.end_seconds; toast("Moment saved to Notebook");
     }
     await Promise.all([loadBookmarks(), loadBookmarkLabels(), loadSessions()]); renderComposer(state.selectedBookmark);
   } catch (error) { toast(error.message); }
 }
 
 async function deleteSelectedBookmark() {
-  if (!state.selectedBookmark || !confirm("Delete this bookmark? The session recording will remain.")) return;
-  try { await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "DELETE" }); clearIntervalSelection(); await Promise.all([loadBookmarks(), loadBookmarkLabels(), loadSessions()]); toast("Bookmark deleted"); } catch (error) { toast(error.message); }
+  if (!state.selectedBookmark || !confirm("Delete this saved moment from Notebook? The session recording will remain.")) return;
+  try { await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "DELETE" }); clearIntervalSelection(); await Promise.all([loadBookmarks(), loadBookmarkLabels(), loadSessions()]); toast("Saved moment deleted"); } catch (error) { toast(error.message); }
 }
 
 async function openBookmark(bookmark) {
@@ -457,7 +641,7 @@ async function loadCloudSessions() { if (!state.sharing?.configured) { state.clo
 async function loadSessions() { state.sessions = await request("/api/sessions"); if (state.selected) state.selected = state.sessions.find((item) => item.id === state.selected.id) || null; renderSessions(); renderSelected(); }
 async function loadBookmarks() { const params = new URLSearchParams(); if ($("bookmark-search").value) params.set("search", $("bookmark-search").value); if ($("bookmark-label-filter").value) params.set("label", $("bookmark-label-filter").value); state.bookmarks = await request(`/api/bookmarks?${params}`); renderBookmarks(); }
 async function loadBookmarkLabels() { state.bookmarkLabels = await request("/api/bookmark-labels"); renderBookmarkLabels(); }
-async function selectSession(session) { state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.clusterMeta = null; state.patternFilter = null; state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderSessions(); renderBookmarks(); renderSelected(); await Promise.all([loadCategories(), loadEvents(), loadBiosignalClusters()]); drawSignals(); }
+async function selectSession(session) { location.hash = "review"; showWorkspaceView(); state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.clusterMeta = null; state.patternFilter = null; state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; state.selectedTrackTags = null; $("annotation-composer").hidden = true; renderSessions(); renderBookmarks(); renderSelected(); await Promise.all([loadCategories(), loadEvents(), loadBiosignalClusters()]); drawSignals(); }
 
 async function loadBiosignalClusters() {
   if (!state.detail || state.detail.status === "recording") { state.clusters = []; state.clusterLegend = []; return; }
@@ -468,12 +652,28 @@ async function loadBiosignalClusters() {
 }
 async function loadCategories() { const select = $("category"), selected = select.value; const categories = state.selected ? await request(`/api/sessions/${state.selected.id}/categories`) : []; select.replaceChildren(new Option("All activity", "")); categories.forEach((value) => select.append(new Option(value, value))); select.value = categories.includes(selected) ? selected : ""; }
 async function loadEvents() { if (!state.selected) return; const params = new URLSearchParams(); if ($("category").value) params.set("category", $("category").value); if ($("confidence").value) params.set("confidence", $("confidence").value); if ($("search").value) params.set("search", $("search").value); state.events = await request(`/api/sessions/${state.selected.id}/events?${params}`); renderEvents(); }
-async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]); await Promise.all([loadCloudSessions(), loadBookmarks()]); if (state.selected) await selectSession(state.selected); }
+async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]); await Promise.all([loadCloudSessions(), loadBookmarks()]); if (state.selected) { const view = location.hash; await selectSession(state.selected); location.hash = view; showWorkspaceView(); } }
 
 $("record-button").addEventListener("click", async () => { try { state.health?.active_session_id ? await stopRecording() : await startRecording(); } catch (error) { toast(error.message); } });
 $("refresh-sessions").addEventListener("click", refreshAll);
 $("annotation-composer").addEventListener("submit", saveAnnotation); $("annotation-cancel").addEventListener("click", clearIntervalSelection); $("annotation-delete").addEventListener("click", deleteSelectedBookmark);
-for (const id of ["annotation-start", "annotation-end"]) $(id).addEventListener("change", () => { if (!state.selectedInterval || state.selectedBookmark) return; const start = Number($("annotation-start").value), end = Number($("annotation-end").value); if (Number.isFinite(start) && Number.isFinite(end) && end > start) selectInterval({ ...state.selectedInterval, start, end }); });
+$("annotation-composer").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { event.preventDefault(); clearIntervalSelection(); }
+  else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); $("annotation-composer").requestSubmit(); }
+});
+$("annotation-labels").addEventListener("input", renderLabelSuggestions);
+for (const id of ["annotation-start", "annotation-end"]) {
+  $(id).addEventListener("input", updateDurationDisplay);
+  $(id).addEventListener("change", () => {
+    if (!state.selectedInterval || state.selectedBookmark) return;
+    const start = Number($("annotation-start").value), end = Number($("annotation-end").value);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      const note = $("annotation-note").value, labels = $("annotation-labels").value;
+      selectInterval({ ...state.selectedInterval, start, end });
+      $("annotation-note").value = note; $("annotation-labels").value = labels;
+    }
+  });
+}
 let bookmarkSearchTimer; $("bookmark-search").addEventListener("input", () => { clearTimeout(bookmarkSearchTimer); bookmarkSearchTimer = setTimeout(loadBookmarks, 250); }); $("bookmark-label-filter").addEventListener("change", loadBookmarks);
 $("import-button").addEventListener("click", () => $("import-file").click());
 $("import-file").addEventListener("change", async (event) => {
@@ -491,7 +691,7 @@ $("cloud-share-button").addEventListener("click", async () => {
 });
 $("copy-share-link").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("share-link").value); toast("Private link copied"); } catch { $("share-link").select(); toast("Select and copy the link"); } });
 $("close-share-modal").addEventListener("click", () => { $("share-modal").hidden = true; });
-$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderEvents(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); toast("Session deleted"); });
+$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderEvents(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); location.hash = "sessions"; toast("Session deleted"); });
 for (const id of ["category", "confidence"]) $(id).addEventListener("change", loadEvents);
 let searchTimer; $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadEvents, 250); });
 $("playhead").addEventListener("input", (event) => seekTimeline(event.target.value));

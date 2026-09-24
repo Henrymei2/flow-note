@@ -3,14 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FL Studio Activity Recorder</title>
+  <title>FlowNote · Music production notebook</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <header class="topbar">
     <div>
-      <p class="eyebrow">LOCAL SESSION TIMELINE</p>
-      <h1>FL Studio Activity Recorder</h1>
+      <h1>FlowNote</h1>
     </div>
     <div class="connection" id="connection">
       <span class="status-dot"></span>
@@ -18,66 +17,85 @@
     </div>
   </header>
 
-  <main class="layout">
-    <aside class="sidebar panel">
+  <nav class="workspace-nav" aria-label="Workspace">
+    <a href="#sessions" data-view-link="sessions">Sessions</a>
+    <a href="#review" data-view-link="review">Session review</a>
+    <a href="#notebook" data-view-link="notebook">Notebook</a>
+  </nav>
+  <main class="workspace">
+    <section class="sessions-page panel" id="sessions-view" aria-label="Sessions">
+      <div class="page-heading"><p class="eyebrow">YOUR WORKSPACE</p><h2>Sessions</h2><p class="muted">A record of your music-making process.</p></div>
       <div class="record-card">
-        <p class="label">Recording</p>
+        <div class="record-intro"><p class="eyebrow">CAPTURE</p><h3>Start with a session.</h3><p class="muted">Bring your workspace, activity and body signals together.</p></div>
+        <div class="record-controls">
         <button class="record-button" id="record-button" disabled>
           <span class="record-icon"></span><span id="record-label">Start recording</span>
         </button>
         <p class="muted" id="record-help">Connect the FL Studio observer to begin.</p>
         <p class="source-hint" id="emotibit-hint">Enable the EmotiBit LSL output in Oscilloscope.</p>
+        </div>
       </div>
 
-      <div class="section-heading">
-        <h2>Local sessions</h2>
-        <button class="icon-button" id="refresh-sessions" title="Refresh local and cloud sessions">↻</button>
-      </div>
+      <div class="section-heading library-heading">
+        <h2>Your sessions</h2>
+        <div class="library-actions"><button class="button secondary" id="refresh-sessions" title="Refresh local and cloud sessions">Refresh</button>
       <button class="button secondary import-button" id="import-button">Import research archive</button>
+        </div>
+      </div>
       <input id="import-file" type="file" accept=".zip,application/zip" hidden>
       <div id="session-list" class="session-list"></div>
       <p class="empty muted" id="sessions-empty">No recordings yet.</p>
 
+      <details class="cloud-library"><summary>Cloud sessions <span>Shared research archives</span></summary>
+      <div id="cloud-session-list" class="session-list"></div>
+      <p class="empty muted" id="cloud-sessions-empty">Refresh to check R2.</p>
+      </details>
+    </section>
+
+    <section class="notebook-page panel" id="notebook-view" aria-label="Cross-session notebook" hidden>
+      <p class="eyebrow">REFLECT & EXPLORE</p>
       <div class="section-heading bookmark-heading">
-        <h2>Bookmarks</h2>
+        <h2>Notebook</h2>
         <span class="count" id="bookmark-count">0</span>
       </div>
-      <input id="bookmark-search" type="search" placeholder="Search notes, labels, projects">
+      <p class="muted notebook-intro">Search saved moments across sessions. Open a moment to review its recording, activity and signals.</p>
+      <div class="notebook-filters"><input id="bookmark-search" type="search" aria-label="Search bookmarks" placeholder="Search notes, labels, projects">
       <select id="bookmark-label-filter" aria-label="Filter bookmarks by label">
         <option value="">All labels</option>
       </select>
+      </div>
       <div id="bookmark-list" class="bookmark-list"></div>
       <p class="empty muted" id="bookmarks-empty">Select an interval to start your notebook.</p>
 
-      <div class="section-heading cloud-heading">
-        <h2>Cloud sessions</h2>
-      </div>
-      <div id="cloud-session-list" class="session-list"></div>
-      <p class="empty muted" id="cloud-sessions-empty">Refresh to check R2.</p>
-    </aside>
+    </section>
 
-    <section class="content">
+    <section class="review-page" id="review-view" aria-label="Session review" hidden>
+      <div class="page-heading"><a href="#sessions">Back to sessions</a><h2>Session review</h2><p class="muted">Select a suggested or custom interval, add a note, and save it to Notebook.</p></div>
       <div class="summary panel" id="summary">
         <div>
           <p class="eyebrow" id="session-status">SELECT A SESSION</p>
-          <h2 id="session-title">Your production story will appear here</h2>
+          <div class="title-edit">
+            <h2 id="session-title">Your production story will appear here</h2>
+            <input id="session-title-input" class="title-input" type="text" maxlength="120" hidden aria-label="Session name">
+            <button class="icon-button" id="session-title-edit" type="button" title="Rename session" aria-label="Rename session" hidden>✎</button>
+          </div>
           <p class="muted" id="session-time">Record a session to build a searchable timeline.</p>
         </div>
-        <div class="summary-actions">
+        <details class="session-actions"><summary>Session actions</summary><div class="summary-actions">
           <a class="button secondary disabled" id="event-export-button" href="#">Events JSONL</a>
           <a class="button secondary disabled" id="share-button" href="#">Download archive</a>
           <button class="button disabled" id="cloud-share-button" disabled>Upload to cloud</button>
-          <button class="button danger" id="delete-button" disabled>Delete</button>
-        </div>
+          <button class="button danger" id="delete-button" disabled>Delete session</button>
+        </div></details>
       </div>
 
       <div class="review panel" id="review-panel" hidden>
         <div class="source-status" id="source-status"></div>
         <div class="review-toolbar">
-          <p class="selection-help" id="selection-help">Drag across the timeline to select an interval.</p>
+          <p class="selection-help" id="selection-help">Drag to select an interval</p>
           <div class="toolbar-controls">
-            <button type="button" class="toggle-button active" id="pattern-toggle-button" hidden aria-pressed="true">
-              <span class="toggle-dot" aria-hidden="true"></span>Pattern overlay
+            <button type="button" class="toggle-button active" id="pattern-toggle-button" hidden aria-pressed="true" title="Show or hide pattern-suggestion overlay">
+              <span class="toggle-dot" aria-hidden="true"></span>Show suggestions
             </button>
             <div class="playhead-controls">
               <span id="playhead-label">00:00.000</span>
@@ -97,6 +115,7 @@
 
         <div class="timeline-stack" id="timeline-stack">
           <div class="pattern-overlay" id="pattern-overlay" aria-hidden="true"></div>
+          <div class="timeline-grid" id="timeline-grid" aria-hidden="true"></div>
           <div class="timeline-row timeline-ruler-row">
             <div class="lane-label"></div>
             <div class="lane-content">
@@ -114,7 +133,11 @@
           </div>
           <div id="signal-tracks" class="signal-tracks"></div>
           <div class="timeline-playhead" id="timeline-playhead" hidden></div>
-          <div class="timeline-selection" id="timeline-selection" hidden></div>
+          <div class="timeline-drag-preview" id="timeline-drag-preview" hidden><span class="drag-duration" id="drag-duration"></span></div>
+          <div class="timeline-selection" id="timeline-selection" hidden>
+            <div class="selection-handle selection-handle-start" data-edge="start"></div>
+            <div class="selection-handle selection-handle-end" data-edge="end"></div>
+          </div>
         </div>
 
         <div class="pattern-legend-row" id="pattern-legend-row" hidden>
@@ -133,51 +156,59 @@
           <div class="interval-fields">
             <label><span>Start (seconds)</span><input id="annotation-start" type="number" min="0" step="0.001" required></label>
             <label><span>End (seconds)</span><input id="annotation-end" type="number" min="0" step="0.001" required></label>
+            <span class="interval-duration" id="annotation-duration"></span>
           </div>
           <label><span>Labels</span><input id="annotation-labels" type="text" list="bookmark-label-options" placeholder="e.g. overthinking, transition"></label>
           <datalist id="bookmark-label-options"></datalist>
+          <div class="label-suggestions" id="label-suggestions"></div>
           <label><span>Written note</span><textarea id="annotation-note" rows="4" required placeholder="What was happening, and how do you interpret it?"></textarea></label>
           <div class="summary-actions">
-            <button class="button" id="annotation-save" type="submit">Save bookmark</button>
-            <button class="button danger" id="annotation-delete" type="button" hidden>Delete bookmark</button>
+            <button class="button" id="annotation-save" type="submit">Save to Notebook</button>
+            <a class="button secondary" href="#notebook">Open Notebook</a>
+            <button class="button danger" id="annotation-delete" type="button" hidden>Delete saved moment</button>
+            <p class="composer-hint">Ctrl/Cmd+Enter to save · Esc to cancel</p>
           </div>
         </form>
       </div>
 
-      <div class="filters panel">
-        <label>
-          <span>Search</span>
-          <input id="search" type="search" placeholder="Find a track, plugin, or action">
-        </label>
-        <label>
-          <span>Category</span>
-          <select id="category">
-            <option value="">All activity</option>
-          </select>
-        </label>
-        <label>
-          <span>Confidence</span>
-          <select id="confidence">
-            <option value="">All confidence</option>
-            <option value="exact">Exact</option>
-            <option value="state_diff">State-derived</option>
-            <option value="signal_only">Signal only</option>
-          </select>
-        </label>
-      </div>
+      <details class="events-section" open>
+        <summary>All events <span>Search and browse the raw activity log</span></summary>
 
-      <div class="timeline panel">
-        <div class="pattern-filter" id="pattern-filter" hidden>
-          <span id="pattern-filter-text"></span>
-          <button class="button secondary" id="pattern-filter-clear">Show all events</button>
+        <div class="filters panel">
+          <label>
+            <span>Search this session’s events</span>
+            <input id="search" type="search" placeholder="Find a track, plugin, or action">
+          </label>
+          <label>
+            <span>Category</span>
+            <select id="category">
+              <option value="">All activity</option>
+            </select>
+          </label>
+          <label>
+            <span>Confidence</span>
+            <select id="confidence">
+              <option value="">All confidence</option>
+              <option value="exact">Exact</option>
+              <option value="state_diff">State-derived</option>
+              <option value="signal_only">Signal only</option>
+            </select>
+          </label>
         </div>
-        <div id="event-list"></div>
-        <div class="timeline-empty" id="timeline-empty">
-          <div class="empty-mark">♪</div>
-          <h3>No timeline events</h3>
-          <p class="muted">Choose a session or start recording in FL Studio.</p>
+
+        <div class="timeline panel">
+          <div class="pattern-filter" id="pattern-filter" hidden>
+            <span id="pattern-filter-text"></span>
+            <button class="button secondary" id="pattern-filter-clear">Clear selection</button>
+          </div>
+          <div id="event-list"></div>
+          <div class="timeline-empty" id="timeline-empty">
+            <div class="empty-mark">♪</div>
+            <h3>No timeline events</h3>
+            <p class="muted">Choose a session or start recording in FL Studio.</p>
+          </div>
         </div>
-      </div>
+      </details>
     </section>
   </main>
 

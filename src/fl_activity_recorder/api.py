@@ -223,6 +223,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def list_sessions() -> list[dict[str, Any]]:
         return database.list_sessions()
 
+    @app.patch("/api/sessions/{session_id}")
+    async def rename_session(session_id: str, request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        title = str(payload.get("project_title") or "").strip() or None
+        try:
+            return database.rename_session(session_id, title)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Session not found") from exc
+
     @app.get("/api/sessions/{session_id}")
     async def get_session(session_id: str) -> dict[str, Any]:
         """Return one session with its assets and signal catalog."""
