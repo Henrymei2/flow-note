@@ -52,6 +52,8 @@ def load_observer() -> tuple[ModuleType, list[bytes], dict[str, int], dict[str, 
         "plugin_values": [index / 600 for index in range(600)],
         "undo": {"position": 3, "count": 4, "last": 3, "hint": "Initial state"},
         "grid": set(),
+        "project_title": "Test Project",
+        "window_title": "Test Project.flp - FL Studio",
     }
     modules: dict[str, ModuleType] = {}
     for name in [
@@ -69,7 +71,7 @@ def load_observer() -> tuple[ModuleType, list[bytes], dict[str, int], dict[str, 
 
     modules["device"].midiOutSysex = outputs.append  # type: ignore[attr-defined]
     modules["general"].getVersion = lambda: 45  # type: ignore[attr-defined]
-    modules["general"].getProjectTitle = lambda: "Test Project"  # type: ignore[attr-defined]
+    modules["general"].getProjectTitle = lambda: state["project_title"]  # type: ignore[attr-defined]
     modules["general"].getProjectAuthor = lambda: "Tester"  # type: ignore[attr-defined]
     modules["general"].getChangedFlag = lambda: 1  # type: ignore[attr-defined]
     modules["general"].getUndoHistoryPos = lambda: state["undo"]["position"]  # type: ignore[attr-defined]
@@ -106,6 +108,7 @@ def load_observer() -> tuple[ModuleType, list[bytes], dict[str, int], dict[str, 
     modules["mixer"].getActiveEffectIndex = lambda: state["active_effect"]  # type: ignore[attr-defined]
 
     modules["ui"].getVersion = lambda: "26.2"  # type: ignore[attr-defined]
+    modules["ui"].getProgTitle = lambda: state["window_title"]  # type: ignore[attr-defined]
     modules["ui"].getFocusedPluginName = lambda: state["focus"]["plugin"]  # type: ignore[attr-defined]
     modules["ui"].getFocusedFormCaption = lambda: state["focus"]["caption"]  # type: ignore[attr-defined]
     modules["ui"].getFocusedFormID = lambda: state["focus"]["id"]  # type: ignore[attr-defined]
@@ -196,6 +199,28 @@ def test_observer_contract_hello_and_full_refresh() -> None:
     outputs.clear()
     observer.OnDoFullRefresh()  # type: ignore[attr-defined]
     assert [message.kind for message in decode_messages(outputs)] == [MessageKind.SNAPSHOT]
+
+
+def test_project_title_falls_back_to_fl_studio_window_title() -> None:
+    observer, outputs, _, state = load_observer()
+    state["project_title"] = "  "
+    state["window_title"] = "  Night Drive.flp - FL Studio  "
+
+    observer.OnInit()  # type: ignore[attr-defined]
+    messages = decode_messages(outputs)
+
+    assert messages[0].payload["project_title"] == "Night Drive.flp - FL Studio"
+    assert messages[1].payload["project_title"] == "Night Drive.flp - FL Studio"
+
+
+def test_project_metadata_title_takes_precedence_over_window_title() -> None:
+    observer, outputs, _, state = load_observer()
+    state["project_title"] = "  Night Drive  "
+    state["window_title"] = "Different Name.flp - FL Studio"
+
+    observer.OnInit()  # type: ignore[attr-defined]
+
+    assert decode_messages(outputs)[0].payload["project_title"] == "Night Drive"
 
 
 def test_playback_uses_indicator_trigger_and_idle_fallback() -> None:

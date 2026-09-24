@@ -74,7 +74,7 @@ In FL Studio, open **Options → MIDI settings**:
    the same FL port number.
 5. Leave the Events bus disabled under Input and the Control bus disabled under Output.
 6. Open **View → Script output** and confirm that Activity Recorder initializes.
-   It must print `schema=3 build=unified-timeline-v1`.
+   It must print `schema=3 build=project-title-fallback-v1`.
 
 Start the companion:
 
@@ -106,7 +106,7 @@ In FL Studio, open **Options → MIDI settings**:
 3. Assign it an unused FL port number, such as `42`.
 4. Enable `ActivityRecorder Events` under Output and assign the same FL port number.
 5. Open **View → Script output** and confirm that Activity Recorder initializes without errors.
-   It must print `schema=3 build=unified-timeline-v1`.
+   It must print `schema=3 build=project-title-fallback-v1`.
 
 Start the companion:
 

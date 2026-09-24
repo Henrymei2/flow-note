@@ -8,7 +8,7 @@ and Windows with loopMIDI before publishing a cross-platform release.
 - [ ] Observer appears as **Activity Recorder (user)** and reports API 42+
 - [ ] Platform setup check finds both virtual MIDI ports
 - [ ] Companion connects within five seconds
-- [ ] Script Output, dashboard health, and export all report `unified-timeline-v1`
+- [ ] Script Output, dashboard health, and export all report `project-title-fallback-v1`
 - [ ] Physical MIDI controllers and keyboard input still behave normally
 - [ ] Observer never consumes or modifies incoming user MIDI
 - [ ] Start/stop consent rules are respected
@@ -16,6 +16,8 @@ and Windows with loopMIDI before publishing a cross-platform release.
 
 ## Capture scenarios
 
+- [ ] Leave Project Info title empty, open a named `.flp`, and confirm the session uses the FL
+      Studio window title instead of `Untitled project`
 - [ ] Load, fail to load, and replace a project
 - [ ] Start/stop playback and observe `transport/playing_changed`; toggle recording and
       song/pattern mode; change tempo

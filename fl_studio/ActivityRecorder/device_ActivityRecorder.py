@@ -16,9 +16,9 @@ import ui
 
 PROTOCOL_VERSION = 1
 MINIMUM_API_VERSION = 42
-OBSERVER_VERSION = "0.3.0"
+OBSERVER_VERSION = "0.3.1"
 OBSERVER_SCHEMA = 3
-OBSERVER_BUILD = "unified-timeline-v1"
+OBSERVER_BUILD = "project-title-fallback-v1"
 OBSERVER_CAPABILITIES = (
     "transport_state",
     "channel_selection",
@@ -88,6 +88,15 @@ def _safe(function, default=None, *args):
 def _safe_int(function, default=-1, *args):
     value = _safe(function, default, *args)
     return value if isinstance(value, int) else default
+
+
+def _read_project_title():
+    """Return project metadata title, falling back to the FL Studio window title."""
+    project_title = _safe(getattr(general, "getProjectTitle", lambda: ""), "")
+    if isinstance(project_title, str) and project_title.strip():
+        return project_title.strip()
+    window_title = _safe(getattr(ui, "getProgTitle", lambda: ""), "")
+    return window_title.strip() if isinstance(window_title, str) else ""
 
 
 def _flag(name, default):
@@ -228,7 +237,7 @@ class ActivityRecorder:
                 "capabilities": list(OBSERVER_CAPABILITIES),
                 "api_version": api_version,
                 "fl_version": _safe(getattr(ui, "getVersion", lambda: ""), ""),
-                "project_title": _safe(getattr(general, "getProjectTitle", lambda: ""), ""),
+                "project_title": _read_project_title(),
             },
         )
         if api_version < MINIMUM_API_VERSION:
@@ -285,7 +294,7 @@ class ActivityRecorder:
         pattern_index = self.pattern_selection if self.pattern_selection is not None else -1
         mixer_current = _safe_int(mixer.trackNumber, -1)
         return {
-            "project_title": _safe(getattr(general, "getProjectTitle", lambda: ""), ""),
+            "project_title": _read_project_title(),
             "project_author": _safe(getattr(general, "getProjectAuthor", lambda: ""), ""),
             "changed_flag": _safe(general.getChangedFlag, 0),
             "playing": self.transport_state["playing"],
@@ -315,7 +324,7 @@ class ActivityRecorder:
         self.send(
             KIND_HEARTBEAT,
             {
-                "project_title": _safe(getattr(general, "getProjectTitle", lambda: ""), ""),
+                "project_title": _read_project_title(),
                 "api_version": _safe(general.getVersion, 0),
                 "playing": bool(_safe(transport.isPlaying, 0)),
                 "recording": bool(_safe(transport.isRecording, 0)),
