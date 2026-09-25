@@ -92,7 +92,7 @@ Open PowerShell in this repository and run:
 .\scripts\install.ps1
 ```
 
-The installer copies the observer to your user Hardware folder and installs the local companion. It deliberately does not install loopMIDI or alter FL Studio settings.
+The installer copies the observer to your user Hardware folder and installs the local companion. If this repository has a `.env` file, the installer copies it to `%LOCALAPPDATA%\FLActivityRecorder\.env` so the installed companion can read its Cloudflare R2 settings. It deliberately does not install loopMIDI or alter FL Studio settings.
 
 In loopMIDI, create these ports:
 

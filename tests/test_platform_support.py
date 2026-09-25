@@ -40,6 +40,8 @@ def test_installers_verify_observer_and_require_reload() -> None:
     assert "checksum" in macos.lower() and "reload Activity Recorder" in macos
     assert "checksum" in windows.lower() and "reload Activity Recorder" in windows
     assert "companion=" in macos and "companion=" in windows
+    assert 'cp "$REPO_ROOT/.env" "$INSTALL_ROOT/.env"' in macos
+    assert 'Copy-Item "$RepoRoot\\.env" "$InstallRoot\\.env"' in windows
 
 
 def test_installers_accept_supported_python_versions() -> None:

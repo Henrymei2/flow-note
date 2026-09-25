@@ -258,6 +258,8 @@ class Recorder:
                     "entity_type": "project",
                     "payload": payload,
                 }
+            if payload.get("category") == "navigation" and payload.get("action") == "hint":
+                return
             observed = _float_or_none(payload.pop("observed_monotonic_seconds", None))
             source_lsl = self.clock.monotonic_to_lsl(observed) if observed is not None else None
             session = self.database.get_session(session_id)

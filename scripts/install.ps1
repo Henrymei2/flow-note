@@ -17,6 +17,10 @@ if ($LASTEXITCODE -ne 0) {
 
 & py -3 --version | Out-Host
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+# Keep private cloud-sharing credentials beside the installed companion configuration.
+if (Test-Path "$RepoRoot\.env") {
+    Copy-Item "$RepoRoot\.env" "$InstallRoot\.env" -Force
+}
 # Recreate the environment so stale interpreter links from an older Python cannot survive.
 & py -3 -m venv --clear "$InstallRoot\.venv"
 $VenvPython = "$InstallRoot\.venv\Scripts\python.exe"
