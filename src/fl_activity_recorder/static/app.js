@@ -1,4 +1,4 @@
-const state = { health: null, sharing: null, sessions: [], cloudSessions: [], bookmarks: [], bookmarkLabels: [], selectedBookmark: null, selectedInterval: null, focusWindow: null, selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clusterMeta: null, clustersVisible: true, patternFilter: null, collapsedTracks: new Set(), selectedTrackTags: null };
+const state = { health: null, sharing: null, sessions: [], cloudSessions: [], bookmarks: [], bookmarkLabels: [], selectedBookmark: null, selectedInterval: null, focusWindow: null, selected: null, events: [], detail: null, capture: null, currentTime: 0, timeline: null, liveBuffers: new Map(), liveDescriptors: [], clusters: [], clusterLegend: [], clusterMeta: null, clustersVisible: true, collapsedTracks: new Set(), selectedTrackTags: null };
 const $ = (id) => document.getElementById(id);
 
 function showWorkspaceView() {
@@ -94,8 +94,6 @@ function renderCloudSessions(message = "") {
 function renderSelected() {
   const session = state.detail || state.selected; const shareable = session && session.status !== "recording"; const cloudReady = shareable && state.sharing?.configured; $("event-export-button").classList.toggle("disabled", !session); $("share-button").classList.toggle("disabled", !shareable); $("cloud-share-button").disabled = !cloudReady; $("cloud-share-button").classList.toggle("disabled", !cloudReady); $("share-button").title = shareable ? "Download all available FL Studio, video, and physiology data" : "Stop the recording before sharing it"; $("cloud-share-button").title = !state.sharing?.configured ? "Add Cloudflare R2 credentials to enable private links" : $("share-button").title;
   $("delete-button").disabled = !session || session.status === "recording"; $("review-panel").hidden = !session;
-  document.querySelector(".filters").hidden = !session;
-  document.querySelector(".timeline").hidden = !session;
   $("session-title-edit").hidden = !session || session.status === "recording";
   if (!session) {
     $("session-status").textContent = "NO SESSION OPEN";
@@ -115,23 +113,19 @@ function renderSelected() {
   $("playhead").max = Math.max(0.001, sessionDuration(session)); renderTrackPicker();
 }
 
-function renderEvents() {
-  const filter = state.patternFilter;
-  const filterBar = $("pattern-filter"); filterBar.hidden = !filter;
-  const events = filter
-    ? state.events.filter((event) => event.timeline_seconds != null && event.timeline_seconds >= filter.start && event.timeline_seconds < filter.end)
-    : state.events;
-  if (filter) $("pattern-filter-text").textContent = `${events.length} event(s) during: ${filter.label} (${formatTime(filter.start)}–${formatTime(filter.end)})`;
-  const list = $("event-list"); list.replaceChildren(); $("timeline-empty").hidden = events.length > 0;
-  for (const event of events) {
-    const row = document.createElement("article"); row.className = "event";
-    const time = document.createElement("time"); time.className = "event-time"; time.textContent = event.timeline_seconds == null ? new Date(event.occurred_at).toLocaleTimeString() : formatTime(event.timeline_seconds);
-    const dot = document.createElement("div"); dot.className = "event-dot";
-    const body = document.createElement("div"); body.className = "event-body"; const summary = document.createElement("strong"); summary.textContent = event.summary;
-    const detail = document.createElement("p"); detail.className = "muted"; detail.textContent = [event.category, event.entity_type, event.entity_key].filter(Boolean).join(" · "); body.append(summary, detail);
-    const badge = document.createElement("span"); badge.className = `badge ${event.confidence}`; badge.textContent = event.confidence.replace("_", " "); row.append(time, dot, body, badge);
-    if (event.timeline_seconds != null) row.addEventListener("click", () => seekTimeline(event.timeline_seconds)); list.append(row);
+function transportMarker(event) {
+  if (event.category !== "transport") return null;
+  const after = event.payload?.after;
+  const summary = String(event.summary || "").toLowerCase();
+  if (event.action === "playing_changed" || summary === "playback started" || summary === "playback stopped") {
+    if (after === true || summary === "playback started") return ["playback-start", "▶", "Start playback"];
+    if (after === false || summary === "playback stopped") return ["playback-stop", "❚❚", "Stop playback"];
   }
+  if (event.action === "recording_changed" || summary === "fl studio recording enabled" || summary === "fl studio recording disabled") {
+    if (after === true || summary === "fl studio recording enabled") return ["recording-start", "●", "Start recording"];
+    if (after === false || summary === "fl studio recording disabled") return ["recording-stop", "■", "Stop recording"];
+  }
+  return null;
 }
 
 // Selected tracks are chips the user can remove, plus a single "+ Add track"
@@ -231,7 +225,15 @@ function drawSignals() {
   }
   drawTimelineGrid(span);
   const ruler = $("event-ruler"); ruler.replaceChildren();
-  for (const event of state.timeline.events) { const marker = document.createElement("button"); marker.className = "event-marker"; marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`; marker.title = `${formatTime(event.timeline_seconds)} · ${event.summary}`; marker.addEventListener("click", (event_) => { event_.stopPropagation(); seekTimeline(event.timeline_seconds); }); ruler.append(marker); }
+  for (const event of state.timeline.events) {
+    const marker = document.createElement("button"); const transport = transportMarker(event);
+    marker.className = transport ? `event-marker transport-marker ${transport[0]}` : "event-marker";
+    if (transport) marker.textContent = transport[1];
+    marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`;
+    marker.title = `${formatTime(event.timeline_seconds)} · ${transport ? transport[2] : event.summary}`;
+    marker.setAttribute("aria-label", marker.title);
+    marker.addEventListener("click", (event_) => { event_.stopPropagation(); seekTimeline(event.timeline_seconds); }); ruler.append(marker);
+  }
   enableIntervalDrag(ruler);
   drawTimelineRuler(span); drawPatternStrip(span); drawPatternOverlay(span);
   updateTimelinePlayhead(); updateTimelineSelection();
@@ -377,7 +379,6 @@ $("pattern-toggle-button").addEventListener("click", () => {
   $("pattern-toggle-button").classList.toggle("active", state.clustersVisible); $("pattern-toggle-button").setAttribute("aria-pressed", String(state.clustersVisible));
   drawSignals();
 });
-$("pattern-filter-clear").addEventListener("click", clearIntervalSelection);
 
 for (const button of document.querySelectorAll(".lane-toggle")) {
   button.addEventListener("click", () => {
@@ -457,11 +458,11 @@ $("timeline-stack").addEventListener("wheel", (event) => {
 
 function selectInterval(interval, bookmark = null) {
   const duration = sessionDuration(state.detail); const start = Math.max(0, Math.min(duration, Number(interval.start))); const end = Math.max(start, Math.min(duration, Number(interval.end)));
-  if (end - start < 0.001) return; state.selectedInterval = { ...interval, start, end }; state.selectedBookmark = bookmark; state.patternFilter = { start, end, label: interval.label || "Selected interval" };
-  const padding = Math.max(1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); renderEvents(); loadTimeline(); renderBookmarks();
+  if (end - start < 0.001) return; state.selectedInterval = { ...interval, start, end }; state.selectedBookmark = bookmark;
+  const padding = Math.max(1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); loadTimeline(); renderBookmarks();
 }
 
-function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.patternFilter = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderEvents(); renderBookmarks(); loadTimeline(); }
+function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderBookmarks(); loadTimeline(); }
 
 function updateDurationDisplay() {
   const start = Number($("annotation-start").value), end = Number($("annotation-end").value);
@@ -641,7 +642,7 @@ async function loadCloudSessions() { if (!state.sharing?.configured) { state.clo
 async function loadSessions() { state.sessions = await request("/api/sessions"); if (state.selected) state.selected = state.sessions.find((item) => item.id === state.selected.id) || null; renderSessions(); renderSelected(); }
 async function loadBookmarks() { const params = new URLSearchParams(); if ($("bookmark-search").value) params.set("search", $("bookmark-search").value); if ($("bookmark-label-filter").value) params.set("label", $("bookmark-label-filter").value); state.bookmarks = await request(`/api/bookmarks?${params}`); renderBookmarks(); }
 async function loadBookmarkLabels() { state.bookmarkLabels = await request("/api/bookmark-labels"); renderBookmarkLabels(); }
-async function selectSession(session) { location.hash = "review"; showWorkspaceView(); state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.clusterMeta = null; state.patternFilter = null; state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; state.selectedTrackTags = null; $("annotation-composer").hidden = true; renderSessions(); renderBookmarks(); renderSelected(); await Promise.all([loadCategories(), loadEvents(), loadBiosignalClusters()]); drawSignals(); }
+async function selectSession(session) { location.hash = "review"; showWorkspaceView(); state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.clusterMeta = null; state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; state.selectedTrackTags = null; $("annotation-composer").hidden = true; renderSessions(); renderBookmarks(); renderSelected(); await Promise.all([loadEvents(), loadBiosignalClusters()]); drawSignals(); }
 
 async function loadBiosignalClusters() {
   if (!state.detail || state.detail.status === "recording") { state.clusters = []; state.clusterLegend = []; return; }
@@ -650,8 +651,7 @@ async function loadBiosignalClusters() {
     state.clusters = result.windows; state.clusterLegend = result.clusters; state.clusterMeta = { algorithm_version: result.algorithm_version, window_seconds: result.window_seconds };
   } catch { state.clusters = []; state.clusterLegend = []; state.clusterMeta = null; }
 }
-async function loadCategories() { const select = $("category"), selected = select.value; const categories = state.selected ? await request(`/api/sessions/${state.selected.id}/categories`) : []; select.replaceChildren(new Option("All activity", "")); categories.forEach((value) => select.append(new Option(value, value))); select.value = categories.includes(selected) ? selected : ""; }
-async function loadEvents() { if (!state.selected) return; const params = new URLSearchParams(); if ($("category").value) params.set("category", $("category").value); if ($("confidence").value) params.set("confidence", $("confidence").value); if ($("search").value) params.set("search", $("search").value); state.events = await request(`/api/sessions/${state.selected.id}/events?${params}`); renderEvents(); }
+async function loadEvents() { if (!state.selected) return; state.events = await request(`/api/sessions/${state.selected.id}/events`); }
 async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]); await Promise.all([loadCloudSessions(), loadBookmarks()]); if (state.selected) { const view = location.hash; await selectSession(state.selected); location.hash = view; showWorkspaceView(); } }
 
 $("record-button").addEventListener("click", async () => { try { state.health?.active_session_id ? await stopRecording() : await startRecording(); } catch (error) { toast(error.message); } });
@@ -691,12 +691,10 @@ $("cloud-share-button").addEventListener("click", async () => {
 });
 $("copy-share-link").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("share-link").value); toast("Private link copied"); } catch { $("share-link").select(); toast("Select and copy the link"); } });
 $("close-share-modal").addEventListener("click", () => { $("share-modal").hidden = true; });
-$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderEvents(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); location.hash = "sessions"; toast("Session deleted"); });
-for (const id of ["category", "confidence"]) $(id).addEventListener("change", loadEvents);
-let searchTimer; $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadEvents, 250); });
+$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); location.hash = "sessions"; toast("Session deleted"); });
 $("playhead").addEventListener("input", (event) => seekTimeline(event.target.value));
 let zoomTimer; $("zoom").addEventListener("input", () => { state.focusWindow = null; updateZoomLabel(); clearTimeout(zoomTimer); zoomTimer = setTimeout(loadTimeline, 60); });
 $("zoom-in").addEventListener("click", () => stepZoom(0.5)); $("zoom-out").addEventListener("click", () => stepZoom(-0.5));
 $("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
-const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = { ...state.health, ...item.health }; renderHealth(); } if (item.type === "emotibit_status") { state.health = { ...state.health, emotibit: item.emotibit }; state.liveDescriptors = item.emotibit.streams || []; renderHealth(); if (state.detail?.status === "recording") renderTrackPicker(); } if (["session_started", "session_stopped"].includes(item.type)) await refreshAll(); if (item.type === "emotibit_samples") appendLiveSamples(item); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); renderEvents(); if (state.detail?.status === "recording") renderLiveSignals(); } }; live.onerror = () => $("connection").classList.remove("connected");
+const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = { ...state.health, ...item.health }; renderHealth(); } if (item.type === "emotibit_status") { state.health = { ...state.health, emotibit: item.emotibit }; state.liveDescriptors = item.emotibit.streams || []; renderHealth(); if (state.detail?.status === "recording") renderTrackPicker(); } if (["session_started", "session_stopped"].includes(item.type)) await refreshAll(); if (item.type === "emotibit_samples") appendLiveSamples(item); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); if (state.detail?.status === "recording") renderLiveSignals(); } }; live.onerror = () => $("connection").classList.remove("connected");
 Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]).then(() => Promise.all([loadCloudSessions(), loadBookmarks()])).catch((error) => toast(error.message));

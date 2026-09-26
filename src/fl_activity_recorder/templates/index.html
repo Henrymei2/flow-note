@@ -3,24 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FlowNote · Music production notebook</title>
+  <title>FL Studio Activity Recorder</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1>FlowNote</h1>
-    </div>
-    <div class="connection" id="connection">
-      <span class="status-dot"></span>
-      <span id="connection-label">Checking FL Studio…</span>
-    </div>
-  </header>
-
   <nav class="workspace-nav" aria-label="Workspace">
     <a href="#sessions" data-view-link="sessions">Sessions</a>
     <a href="#review" data-view-link="review">Session review</a>
     <a href="#notebook" data-view-link="notebook">Notebook</a>
+    <div class="connection" id="connection">
+      <span class="status-dot"></span>
+      <span id="connection-label">Checking FL Studio…</span>
+    </div>
   </nav>
   <main class="workspace">
     <section class="sessions-page panel" id="sessions-view" aria-label="Sessions">
@@ -46,7 +40,7 @@
       <div id="session-list" class="session-list"></div>
       <p class="empty muted" id="sessions-empty">No recordings yet.</p>
 
-      <details class="cloud-library"><summary>Cloud sessions <span>Shared research archives</span></summary>
+      <details class="cloud-library" open><summary>Cloud sessions <span>Shared research archives</span></summary>
       <div id="cloud-session-list" class="session-list"></div>
       <p class="empty muted" id="cloud-sessions-empty">Refresh to check R2.</p>
       </details>
@@ -140,6 +134,13 @@
           </div>
         </div>
 
+        <div class="event-legend" aria-label="FL Studio transport event legend">
+          <span><i class="transport-icon playback-start" aria-hidden="true">▶</i> Start playback</span>
+          <span><i class="transport-icon playback-stop" aria-hidden="true">❚❚</i> Stop playback</span>
+          <span><i class="transport-icon recording-start" aria-hidden="true">●</i> Start recording</span>
+          <span><i class="transport-icon recording-stop" aria-hidden="true">■</i> Stop recording</span>
+        </div>
+
         <div class="pattern-legend-row" id="pattern-legend-row" hidden>
           <div id="cluster-legend" class="cluster-legend" aria-label="Pattern suggestion legend"></div>
         </div>
@@ -171,44 +172,6 @@
         </form>
       </div>
 
-      <details class="events-section" open>
-        <summary>All events <span>Search and browse the raw activity log</span></summary>
-
-        <div class="filters panel">
-          <label>
-            <span>Search this session’s events</span>
-            <input id="search" type="search" placeholder="Find a track, plugin, or action">
-          </label>
-          <label>
-            <span>Category</span>
-            <select id="category">
-              <option value="">All activity</option>
-            </select>
-          </label>
-          <label>
-            <span>Confidence</span>
-            <select id="confidence">
-              <option value="">All confidence</option>
-              <option value="exact">Exact</option>
-              <option value="state_diff">State-derived</option>
-              <option value="signal_only">Signal only</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="timeline panel">
-          <div class="pattern-filter" id="pattern-filter" hidden>
-            <span id="pattern-filter-text"></span>
-            <button class="button secondary" id="pattern-filter-clear">Clear selection</button>
-          </div>
-          <div id="event-list"></div>
-          <div class="timeline-empty" id="timeline-empty">
-            <div class="empty-mark">♪</div>
-            <h3>No timeline events</h3>
-            <p class="muted">Choose a session or start recording in FL Studio.</p>
-          </div>
-        </div>
-      </details>
     </section>
   </main>
 
