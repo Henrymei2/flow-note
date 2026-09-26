@@ -110,7 +110,7 @@ function renderSelected() {
   for (const [label, status] of statuses) { const pill = document.createElement("span"); pill.className = `source-pill ${status}`; pill.textContent = `${label}: ${status}`; statusBox.append(pill); }
   const video = $("session-video"); const videoAsset = session.assets.find((item) => item.kind === "video" && item.status === "ready"); video.hidden = !videoAsset;
   if (videoAsset) { video.src = `/api/sessions/${session.id}/video`; video.dataset.offset = videoAsset.start_offset_seconds || 0; } else { video.removeAttribute("src"); video.load(); }
-  $("playhead").max = Math.max(0.001, sessionDuration(session)); renderTrackPicker();
+  renderTrackPicker();
 }
 
 function transportMarker(event) {
@@ -201,7 +201,7 @@ function trackColor(groupName) {
 }
 
 function drawSignals() {
-  const box = $("signal-tracks"); box.replaceChildren(); if (!state.timeline) return;
+  const box = $("signal-tracks"); box.replaceChildren(); state.trackReadouts = []; $("timeline-hover").hidden = true; if (!state.timeline) return;
   const span = state.timeline.end - state.timeline.start;
   for (const signal of state.timeline.signals) {
     const stream = state.detail.signals.find((item) => item.type_tag === signal.type_tag)
@@ -213,17 +213,25 @@ function drawSignals() {
     const label = document.createElement("button"); label.type = "button"; label.className = "lane-label lane-toggle"; label.setAttribute("aria-expanded", String(!collapsed));
     const chevron = document.createElement("span"); chevron.className = "lane-chevron"; chevron.setAttribute("aria-hidden", "true");
     const dot = document.createElement("span"); dot.className = "lane-dot"; dot.style.background = color;
-    label.append(chevron, dot, document.createTextNode(name));
+    const title = document.createElement("span"); title.className = "lane-title"; title.textContent = name;
+    const value = document.createElement("span"); value.className = "lane-value";
+    title.append(value); label.append(chevron, dot, title);
     label.addEventListener("click", () => {
       const next = !state.collapsedTracks.has(signal.type_tag);
       if (next) state.collapsedTracks.add(signal.type_tag); else state.collapsedTracks.delete(signal.type_tag);
       row.classList.toggle("collapsed", next); label.setAttribute("aria-expanded", String(!next));
     });
     const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 72;
-    drawSignal(canvas, signal, color); enableIntervalDrag(canvas);
-    row.append(label, canvas); box.append(row);
+    const range = drawSignal(canvas, signal, color); enableIntervalDrag(canvas);
+    const unit = stream?.unit || DEFAULT_UNITS[signal.type_tag] || "";
+    const scale = document.createElement("div"); scale.className = "track-scale";
+    if (range) scale.append(Object.assign(document.createElement("span"), { textContent: formatReading(range.max, unit, range) }), Object.assign(document.createElement("span"), { textContent: formatReading(range.min, unit, range) }));
+    const marker = document.createElement("i"); marker.className = "track-hover-dot"; marker.style.background = color; marker.hidden = true;
+    row.append(label, canvas, scale, marker); box.append(row);
+    state.trackReadouts.push({ signal, unit, range, canvas, value, marker });
   }
   drawTimelineGrid(span);
+  if (state.hoverEvent) showTrackHover(state.hoverEvent);
   const ruler = $("event-ruler"); ruler.replaceChildren();
   for (const event of state.timeline.events) {
     const marker = document.createElement("button"); const transport = transportMarker(event);
@@ -388,11 +396,56 @@ for (const button of document.querySelectorAll(".lane-toggle")) {
 }
 
 function drawSignal(canvas, signal, color) {
-  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return; const values = points.flatMap((point) => point.slice(1));
+  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return null; const values = points.flatMap((point) => point.slice(1));
   const min = Math.min(...values), max = Math.max(...values), span = max - min || 1; const x = (time) => (time - state.timeline.start) / (state.timeline.end - state.timeline.start) * canvas.width; const y = (value) => canvas.height - 4 - (value - min) / span * (canvas.height - 8);
   ctx.strokeStyle = color || getComputedStyle(document.documentElement).getPropertyValue("--text").trim(); ctx.lineWidth = 1.25; ctx.beginPath();
   if (signal.mode === "raw") points.forEach((point, index) => index ? ctx.lineTo(x(point[0]), y(point[1])) : ctx.moveTo(x(point[0]), y(point[1]))); else points.forEach((point) => { ctx.moveTo(x(point[0]), y(point[1])); ctx.lineTo(x(point[0]), y(point[2])); }); ctx.stroke();
+  return { min, max, span };
 }
+
+// EmotiBit LSL streams often omit units, so fall back to the documented ones.
+const DEFAULT_UNITS = { HR: "bpm", EA: "µS", TH: "°C", T1: "°C", T0: "°C" };
+// Readings shown on hover: precision follows the visible range so small
+// skin-conductance changes are not rounded away while heart rate stays whole.
+function formatReading(value, unit, range) {
+  const decimals = range.span >= 20 ? 0 : range.span >= 2 ? 1 : range.span >= 0.2 ? 2 : 3;
+  return `${Number(value).toFixed(decimals)}${unit ? ` ${unit}` : ""}`;
+}
+function nearestPoint(points, time) {
+  let low = 0, high = points.length - 1;
+  while (low < high) { const mid = (low + high) >> 1; if (points[mid][0] < time) low = mid + 1; else high = mid; }
+  if (low > 0 && Math.abs(points[low - 1][0] - time) <= Math.abs(points[low][0] - time)) low -= 1;
+  return points[low];
+}
+function hideTrackHover() {
+  $("timeline-hover").hidden = true;
+  for (const item of state.trackReadouts || []) { item.value.textContent = ""; item.marker.hidden = true; }
+}
+// Hovering the signal lanes shows one shared time cursor and every track's
+// reading at that instant, so values can be compared across signals.
+function showTrackHover(event) {
+  if (!state.timeline || !state.trackReadouts?.length) return;
+  const { left, width } = timelineContentBox(); const stackLeft = $("timeline-stack").getBoundingClientRect().left;
+  const ratio = (event.clientX - stackLeft - left) / width; if (ratio < 0 || ratio > 1) { hideTrackHover(); return; }
+  const span = state.timeline.end - state.timeline.start; const time = state.timeline.start + ratio * span;
+  const cursor = $("timeline-hover"); cursor.hidden = false; cursor.style.left = `${left + ratio * width}px`;
+  $("timeline-hover-time").textContent = formatTime(time);
+  const tolerance = Math.max(span * 0.01, 1.5);
+  for (const item of state.trackReadouts) {
+    const point = item.signal.points.length ? nearestPoint(item.signal.points, time) : null;
+    if (!point || !item.range || Math.abs(point[0] - time) > tolerance) { item.value.textContent = "—"; item.marker.hidden = true; continue; }
+    const envelope = item.signal.mode !== "raw" && point.length > 2;
+    const reading = envelope ? (point[1] + point[2]) / 2 : point[1];
+    const low = formatReading(point[1], "", item.range), high = envelope ? formatReading(point[2], "", item.range) : low;
+    item.value.textContent = low === high ? formatReading(reading, item.unit, item.range) : `${low}–${high}${item.unit ? ` ${item.unit}` : ""}`;
+    const canvas = item.canvas;
+    item.marker.hidden = canvas.offsetParent === null;
+    item.marker.style.left = `${canvas.offsetLeft + (point[0] - state.timeline.start) / span * canvas.clientWidth}px`;
+    item.marker.style.top = `${canvas.offsetTop + canvas.clientHeight - 4 - (reading - item.range.min) / (item.range.span || 1) * (canvas.clientHeight - 8)}px`;
+  }
+}
+$("signal-tracks").addEventListener("pointermove", (event) => { state.hoverEvent = { clientX: event.clientX }; showTrackHover(event); });
+$("signal-tracks").addEventListener("pointerleave", () => { state.hoverEvent = null; hideTrackHover(); });
 
 function pointerTime(event, element) { const rect = element.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); return state.timeline.start + ratio * (state.timeline.end - state.timeline.start); }
 
@@ -558,7 +611,7 @@ async function openBookmark(bookmark) {
 }
 
 function seekTimeline(seconds) {
-  state.currentTime = Math.max(0, Number(seconds)); $("playhead").value = state.currentTime; $("playhead-label").textContent = formatTime(state.currentTime);
+  state.currentTime = Math.max(0, Number(seconds));
   const video = $("session-video"); if (!video.hidden && Math.abs(video.currentTime - (state.currentTime - Number(video.dataset.offset || 0))) > 0.1) video.currentTime = Math.max(0, state.currentTime - Number(video.dataset.offset || 0));
   updateTimelinePlayhead();
 }
@@ -692,7 +745,6 @@ $("cloud-share-button").addEventListener("click", async () => {
 $("copy-share-link").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("share-link").value); toast("Private link copied"); } catch { $("share-link").select(); toast("Select and copy the link"); } });
 $("close-share-modal").addEventListener("click", () => { $("share-modal").hidden = true; });
 $("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); location.hash = "sessions"; toast("Session deleted"); });
-$("playhead").addEventListener("input", (event) => seekTimeline(event.target.value));
 let zoomTimer; $("zoom").addEventListener("input", () => { state.focusWindow = null; updateZoomLabel(); clearTimeout(zoomTimer); zoomTimer = setTimeout(loadTimeline, 60); });
 $("zoom-in").addEventListener("click", () => stepZoom(0.5)); $("zoom-out").addEventListener("click", () => stepZoom(-0.5));
 $("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
