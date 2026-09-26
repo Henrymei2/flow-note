@@ -110,6 +110,7 @@ function renderSelected() {
   for (const [label, status] of statuses) { const pill = document.createElement("span"); pill.className = `source-pill ${status}`; pill.textContent = `${label}: ${status}`; statusBox.append(pill); }
   const video = $("session-video"); const videoAsset = session.assets.find((item) => item.kind === "video" && item.status === "ready"); video.hidden = !videoAsset;
   if (videoAsset) { video.src = `/api/sessions/${session.id}/video`; video.dataset.offset = videoAsset.start_offset_seconds || 0; } else { video.removeAttribute("src"); video.load(); }
+  updateListenControl();
   renderTrackPicker();
 }
 
@@ -208,7 +209,7 @@ function drawSignals() {
       || state.liveDescriptors.find((item) => item.track_id === signal.type_tag);
     const name = stream?.display_name || signal.type_tag; const color = trackColor(stream?.group_name);
     const collapsed = state.collapsedTracks.has(signal.type_tag);
-    const row = document.createElement("div"); row.className = `signal-track${collapsed ? " collapsed" : ""}`;
+    const row = document.createElement("div"); row.className = `signal-track${collapsed ? " collapsed" : ""}`; row.dataset.tag = signal.type_tag;
     row.style.setProperty("--track-color", color);
     const label = document.createElement("button"); label.type = "button"; label.className = "lane-label lane-toggle"; label.setAttribute("aria-expanded", String(!collapsed));
     const chevron = document.createElement("span"); chevron.className = "lane-chevron"; chevron.setAttribute("aria-hidden", "true");
@@ -222,12 +223,14 @@ function drawSignals() {
       row.classList.toggle("collapsed", next); label.setAttribute("aria-expanded", String(!next));
     });
     const canvas = document.createElement("canvas"); canvas.width = 1200; canvas.height = 72;
-    const range = drawSignal(canvas, signal, color); enableIntervalDrag(canvas);
+    const headline = selectedHeadline(); const marked = headline?.band && !collapsed && [signal.type_tag, stream?.type_tag].includes(headline.tag);
+    const range = drawSignal(canvas, signal, color, marked ? headline.band : null); enableIntervalDrag(canvas);
     const unit = stream?.unit || DEFAULT_UNITS[signal.type_tag] || "";
     const scale = document.createElement("div"); scale.className = "track-scale";
     if (range) scale.append(Object.assign(document.createElement("span"), { textContent: formatReading(range.max, unit, range) }), Object.assign(document.createElement("span"), { textContent: formatReading(range.min, unit, range) }));
     const marker = document.createElement("i"); marker.className = "track-hover-dot"; marker.style.background = color; marker.hidden = true;
     row.append(label, canvas, scale, marker); box.append(row);
+    if (marked && range) drawHeadlineMarks(row, canvas, range, headline);
     state.trackReadouts.push({ signal, unit, range, canvas, value, marker });
   }
   drawTimelineGrid(span);
@@ -294,7 +297,32 @@ function updateTimelineSelection() {
   box.hidden = false; box.style.left = `${left + (start - state.timeline.start) / span * width}px`; box.style.width = `${(end - start) / span * width}px`;
 }
 
-function clusterLabel(id) { return state.clusterLegend.find((item) => item.id === id)?.label || `pattern ${id + 1}`; }
+function clusterHeadline(id) { return state.clusterLegend.find((item) => item.id === id)?.headline || null; }
+// One line per suggestion: what changed, then the number the scorer compared.
+function clusterLabel(id) {
+  const headline = clusterHeadline(id);
+  if (headline) return `${headline.title} · ${headline.text}`;
+  return state.clusterLegend.find((item) => item.id === id)?.label || `pattern ${id + 1}`;
+}
+function selectedHeadline() {
+  const interval = state.selectedInterval;
+  return interval?.sourceType === "pattern" ? clusterHeadline(interval.patternContext?.cluster_id) : null;
+}
+// Show the explanation on the curve itself: a grey band for the usual level in
+// that 5-minute block, so the stretch that left it is visible at a glance.
+function drawHeadlineMarks(row, canvas, range, headline) {
+  const span = state.timeline.end - state.timeline.start;
+  const x = (time) => canvas.offsetLeft + (Math.min(Math.max(time, state.timeline.start), state.timeline.end) - state.timeline.start) / span * canvas.clientWidth;
+  const y = (value) => canvas.offsetTop + canvas.clientHeight - 4 - (value - range.min) / (range.span || 1) * (canvas.clientHeight - 8);
+  if (headline.band) {
+    const band = document.createElement("div"); band.className = "usual-band";
+    const [low, high] = headline.band.map((value) => Math.min(Math.max(value, range.min), range.max));
+    band.style.left = `${x(headline.block[0])}px`; band.style.width = `${Math.max(0, x(headline.block[1]) - x(headline.block[0]))}px`;
+    band.style.top = `${y(high)}px`; band.style.height = `${Math.max(2, y(low) - y(high))}px`;
+    band.title = "Usual level in this 5-minute block (middle half of readings)";
+    row.append(band);
+  }
+}
 
 // Cluster ids come back ranked calm(0) -> activated(last) from the backend, so
 // a fixed cool -> warm gradient means the same thing on every session: no
@@ -368,7 +396,10 @@ function renderClusterLegend() {
     const chip = document.createElement("button"); chip.type = "button"; chip.className = "cluster-chip";
     chip.addEventListener("click", () => { const interval = state.clusters.find((window) => window.cluster === item.id); if (interval) applyPatternFilter(interval); });
     const dot = document.createElement("i"); dot.style.background = clusterColor(item.id, total);
-    chip.append(dot, document.createTextNode(item.label)); legend.append(chip);
+    const interval = state.clusters.find((window) => window.cluster === item.id);
+    const time = document.createElement("time"); time.textContent = interval ? formatTime(interval.start_seconds).split(".")[0] : "";
+    chip.classList.toggle("active", state.selectedInterval?.patternContext?.cluster_id === item.id);
+    chip.append(dot, time, document.createTextNode(clusterLabel(item.id))); legend.append(chip);
   }
 }
 
@@ -395,8 +426,8 @@ for (const button of document.querySelectorAll(".lane-toggle")) {
   });
 }
 
-function drawSignal(canvas, signal, color) {
-  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return null; const values = points.flatMap((point) => point.slice(1));
+function drawSignal(canvas, signal, color, include = null) {
+  const ctx = canvas.getContext("2d"); const points = signal.points; if (!points.length) return null; const values = points.flatMap((point) => point.slice(1)).concat(include || []);
   const min = Math.min(...values), max = Math.max(...values), span = max - min || 1; const x = (time) => (time - state.timeline.start) / (state.timeline.end - state.timeline.start) * canvas.width; const y = (value) => canvas.height - 4 - (value - min) / span * (canvas.height - 8);
   ctx.strokeStyle = color || getComputedStyle(document.documentElement).getPropertyValue("--text").trim(); ctx.lineWidth = 1.25; ctx.beginPath();
   if (signal.mode === "raw") points.forEach((point, index) => index ? ctx.lineTo(x(point[0]), y(point[1])) : ctx.moveTo(x(point[0]), y(point[1]))); else points.forEach((point) => { ctx.moveTo(x(point[0]), y(point[1])); ctx.lineTo(x(point[0]), y(point[2])); }); ctx.stroke();
@@ -512,7 +543,7 @@ $("timeline-stack").addEventListener("wheel", (event) => {
 function selectInterval(interval, bookmark = null) {
   const duration = sessionDuration(state.detail); const start = Math.max(0, Math.min(duration, Number(interval.start))); const end = Math.max(start, Math.min(duration, Number(interval.end)));
   if (end - start < 0.001) return; state.selectedInterval = { ...interval, start, end }; state.selectedBookmark = bookmark;
-  const padding = Math.max(1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); loadTimeline(); renderBookmarks();
+  const padding = Math.max(interval.sourceType === "pattern" ? 30 : 1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); loadTimeline(); renderBookmarks();
 }
 
 function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderBookmarks(); loadTimeline(); }
@@ -704,6 +735,95 @@ async function loadBiosignalClusters() {
     state.clusters = result.windows; state.clusterLegend = result.clusters; state.clusterMeta = { algorithm_version: result.algorithm_version, window_seconds: result.window_seconds };
   } catch { state.clusters = []; state.clusterLegend = []; state.clusterMeta = null; }
 }
+// Heartbeat sonification: while the session video plays, synthesize a
+// "lub-dub" at the recorded heart rate so the body can be heard, not read.
+const heartbeat = { enabled: false, context: null, master: null, points: null, range: null, sessionId: null, nextBeat: null, lastTime: null, timer: null };
+function heartbeatSupported() { return !!state.detail?.signals?.some((signal) => signal.type_tag === "HR") && !$("session-video").hidden; }
+function updateListenControl() {
+  $("listen-control").hidden = !heartbeatSupported();
+  if ($("listen-control").hidden && heartbeat.enabled) toggleHeartbeat(false);
+}
+async function loadHeartbeatPoints() {
+  if (heartbeat.sessionId === state.detail.id && heartbeat.points) return;
+  const params = new URLSearchParams({ start: 0, end: Math.max(1, sessionDuration(state.detail)), pixels: 5000, tracks: "HR" });
+  const result = await request(`/api/sessions/${state.detail.id}/timeline?${params}`);
+  const signal = result.signals.find((item) => item.type_tag === "HR");
+  heartbeat.points = (signal?.points || []).map((point) => [point[0], signal.mode === "raw" ? point[1] : (point[1] + point[2]) / 2]);
+  heartbeat.sessionId = state.detail.id;
+  // Pitch spans this session's own 5th–95th percentile, so even small changes are audible.
+  const sorted = heartbeat.points.map((point) => point[1]).filter((bpm) => bpm >= 35 && bpm <= 200).sort((a, b) => a - b);
+  heartbeat.range = sorted.length ? [sorted[Math.floor(sorted.length * 0.05)], sorted[Math.floor(sorted.length * 0.95)]] : null;
+}
+// The session's usual range spans one octave from 55 Hz; peaks beyond it keep
+// rising (up to 1.5 octaves) because those are the moments worth hearing.
+function heartbeatPitch(bpm) {
+  const [low, high] = heartbeat.range || [bpm, bpm];
+  const position = high > low ? Math.min(1.5, Math.max(-0.25, (bpm - low) / (high - low))) : 0.5;
+  return 55 * 2 ** position;
+}
+// Median of readings within ±2 s keeps a single glitchy reading from stuttering the beat.
+function heartRateAt(time) {
+  const points = heartbeat.points; if (!points?.length) return null;
+  const nearest = nearestPoint(points, time); if (Math.abs(nearest[0] - time) > 5) return null;
+  let low = 0, high = points.length; while (low < high) { const mid = (low + high) >> 1; if (points[mid][0] < time - 2) low = mid + 1; else high = mid; }
+  const nearby = []; for (let index = low; index < points.length && points[index][0] <= time + 2; index++) nearby.push(points[index][1]);
+  const values = (nearby.length ? nearby : [nearest[1]]).sort((a, b) => a - b);
+  const bpm = values[Math.floor(values.length / 2)];
+  return bpm >= 35 && bpm <= 200 ? bpm : null;
+}
+function playThump(at, strength, pitch) {
+  const ctx = heartbeat.context;
+  const body = ctx.createOscillator(); const bodyGain = ctx.createGain();
+  body.type = "sine"; body.frequency.setValueAtTime(pitch, at); body.frequency.exponentialRampToValueAtTime(pitch * 0.55, at + 0.12);
+  bodyGain.gain.setValueAtTime(0.0001, at); bodyGain.gain.exponentialRampToValueAtTime(strength, at + 0.008); bodyGain.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
+  body.connect(bodyGain).connect(heartbeat.master); body.start(at); body.stop(at + 0.2);
+  // A short filtered click gives the thump an attack laptop speakers can reproduce.
+  const click = ctx.createBufferSource(); const buffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.03), ctx.sampleRate);
+  const data = buffer.getChannelData(0); for (let index = 0; index < data.length; index++) data[index] = (Math.random() * 2 - 1) * (1 - index / data.length);
+  click.buffer = buffer; const filter = ctx.createBiquadFilter(); filter.type = "lowpass"; filter.frequency.value = 900;
+  const clickGain = ctx.createGain(); clickGain.gain.value = strength * 0.35;
+  click.connect(filter).connect(clickGain).connect(heartbeat.master); click.start(at);
+}
+function pulseHeartLane(delaySeconds) {
+  setTimeout(() => {
+    const dot = document.querySelector('.signal-track[data-tag="HR"] .lane-dot'); if (!dot) return;
+    dot.classList.remove("beat"); void dot.offsetWidth; dot.classList.add("beat");
+  }, Math.max(0, delaySeconds * 1000));
+}
+function scheduleHeartbeats() {
+  const video = $("session-video"); if (!heartbeat.enabled || video.paused || video.hidden) { heartbeat.nextBeat = null; return; }
+  const now = video.currentTime + Number(video.dataset.offset || 0); const rate = video.playbackRate || 1;
+  // Re-align after a seek, a jump, or resuming playback.
+  if (heartbeat.nextBeat === null || heartbeat.lastTime === null || now < heartbeat.lastTime - 0.05 || now - heartbeat.lastTime > 1 || heartbeat.nextBeat < now - 0.5) heartbeat.nextBeat = now + 0.05;
+  heartbeat.lastTime = now;
+  while (heartbeat.nextBeat < now + 0.2 * rate) {
+    const bpm = heartRateAt(heartbeat.nextBeat);
+    if (bpm === null) { heartbeat.nextBeat += 0.5; continue; }
+    const interval = 60 / bpm; const at = heartbeat.context.currentTime + Math.max(0, (heartbeat.nextBeat - now) / rate);
+    const pitch = heartbeatPitch(bpm);
+    playThump(at, 0.9, pitch); playThump(at + Math.min(0.28, interval * 0.33) / rate, 0.55, pitch * 1.17);
+    pulseHeartLane(at - heartbeat.context.currentTime);
+    heartbeat.nextBeat += interval;
+  }
+}
+async function toggleHeartbeat(on = !heartbeat.enabled) {
+  heartbeat.enabled = on;
+  $("listen-button").classList.toggle("active", on); $("listen-button").setAttribute("aria-pressed", String(on));
+  clearInterval(heartbeat.timer); heartbeat.nextBeat = null; heartbeat.lastTime = null;
+  if (!on) return;
+  if (!heartbeat.context) {
+    heartbeat.context = new AudioContext(); heartbeat.master = heartbeat.context.createGain();
+    heartbeat.master.connect(heartbeat.context.destination);
+  }
+  heartbeat.master.gain.value = Number($("listen-volume").value);
+  await heartbeat.context.resume();
+  try { await loadHeartbeatPoints(); } catch { toast("Heart-rate data could not be loaded"); toggleHeartbeat(false); return; }
+  heartbeat.timer = setInterval(scheduleHeartbeats, 25);
+  if ($("session-video").paused) toast("Play the video to hear your heartbeat");
+}
+$("listen-button").addEventListener("click", () => toggleHeartbeat());
+$("listen-volume").addEventListener("input", (event) => { if (heartbeat.master) heartbeat.master.gain.value = Number(event.target.value); });
+
 async function loadEvents() { if (!state.selected) return; state.events = await request(`/api/sessions/${state.selected.id}/events`); }
 async function refreshAll() { await Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]); await Promise.all([loadCloudSessions(), loadBookmarks()]); if (state.selected) { const view = location.hash; await selectSession(state.selected); location.hash = view; showWorkspaceView(); } }
 

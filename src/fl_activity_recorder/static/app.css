@@ -161,6 +161,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .zoom-btn:hover { color: var(--text); border-color: var(--muted); }
 #zoom-label { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; min-width: 36px; }
 
+.listen-control { display: flex; align-items: center; gap: 8px; }
+.listen-control[hidden] { display: none; }
+.listen-control input[type="range"] { width: 70px; }
+.lane-dot.beat { animation: heart-beat .32s ease-out; }
+@keyframes heart-beat { 0% { transform: scale(2.2); box-shadow: 0 0 0 4px rgba(255,93,108,.35); } 100% { transform: scale(1); box-shadow: none; } }
 .track-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; }
 .track-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .track-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 6px 5px 11px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-size: 11px; }
@@ -228,6 +233,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .cluster-legend { display: flex; flex-wrap: wrap; gap: 7px; }
 .cluster-legend[hidden] { display: none; }
 .cluster-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 8px; color: var(--muted); font-size: 11px; cursor: pointer; background: transparent; }
+.cluster-chip time { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.cluster-chip.active { color: var(--text); border-color: var(--accent-line); background: var(--accent-soft); }
+.usual-band { position: absolute; background: rgba(255,255,255,.12); border-block: 1px dashed rgba(255,255,255,.35); pointer-events: none; }
 .cluster-chip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; font-style: normal; }
 .signal-tracks { display: grid; }
 .signal-track { position: relative; display: grid; grid-template-columns: var(--lane-label-width) minmax(0,1fr); align-items: center; border-bottom: 1px solid var(--line); border-left: 3px solid var(--track-color, transparent); padding: 6px 0; }

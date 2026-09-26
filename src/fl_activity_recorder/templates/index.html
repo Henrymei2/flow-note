@@ -96,6 +96,12 @@
             <button type="button" class="toggle-button active" id="pattern-toggle-button" hidden aria-pressed="true" title="Show or hide pattern-suggestion overlay">
               <span class="toggle-dot" aria-hidden="true"></span>Show suggestions
             </button>
+            <div class="listen-control" id="listen-control" hidden>
+              <button type="button" class="toggle-button" id="listen-button" aria-pressed="false" title="Play your recorded heartbeat along with the video">
+                <span class="toggle-dot" aria-hidden="true"></span>Listen to heartbeat
+              </button>
+              <input id="listen-volume" type="range" min="0" max="1" step="0.05" value="0.7" aria-label="Heartbeat volume">
+            </div>
             <div class="zoom-control">
               <button type="button" class="zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
               <input id="zoom" type="range" min="0" max="9" step="0.1" value="0" aria-label="Timeline zoom">

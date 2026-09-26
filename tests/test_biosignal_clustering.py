@@ -145,7 +145,28 @@ def test_serialization_keeps_frontend_contract_and_warmest_high_score() -> None:
     ]
     assert result["clusters"][1]["label"] == "Suggestion #1 · EDA"
     assert result["clusters"][1]["centroid"]["movement_peak"] == 0.0
-    assert set(result["clusters"][1]) == {"id", "size", "centroid", "label"}
+    assert set(result["clusters"][1]) == {"id", "size", "centroid", "label", "headline"}
+
+
+def test_headline_restates_the_driving_feature_in_real_units() -> None:
+    """The headline names the top signal and compares its value with the block median."""
+    points = _partitioned_heart_rate_points(600)
+    result = compute_biosignal_clusters(_FakeSignalStore({"HR": points}), "s", 600.0)
+
+    for cluster, window in zip(
+        sorted(result["clusters"], key=lambda item: item["id"]),
+        sorted(result["windows"], key=lambda item: item["cluster"]),
+        strict=True,
+    ):
+        headline = cluster["headline"]
+        assert headline["tag"] == "HR"
+        assert headline["title"].startswith("Heart rate ")
+        assert "bpm" in headline["text"]
+        block_start, block_end = headline["block"]
+        assert block_start <= window["start_seconds"] < block_end
+        assert block_start <= headline["window"][0] < headline["window"][1] <= block_end
+        low, high = headline["band"]
+        assert 60.0 < low <= high < 80.0
 
 
 def test_public_scorer_handles_short_constant_and_implausible_sessions() -> None:
