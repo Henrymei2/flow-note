@@ -61,7 +61,7 @@ function renderSessions() {
 function renderBookmarks() {
   const list = $("bookmark-list"); list.replaceChildren(); $("bookmark-count").textContent = state.bookmarks.length;
   $("bookmarks-empty").hidden = state.bookmarks.length > 0;
-  $("bookmarks-empty").textContent = ($("bookmark-search").value || $("bookmark-label-filter").value) ? "No bookmarks match these filters." : "Select an interval to start your notebook.";
+  $("bookmarks-empty").textContent = ($("bookmark-search").value || $("bookmark-label-filter").value) ? "No bookmarks match these filters." : "No saved moments yet. Select an interval in a session to save one.";
   for (const bookmark of state.bookmarks) {
     const button = document.createElement("button"); button.className = `bookmark-card ${state.selectedBookmark?.id === bookmark.id ? "active" : ""}`;
     const note = document.createElement("strong"); note.textContent = bookmark.note;
@@ -98,7 +98,7 @@ function renderSelected() {
   if (!session) {
     $("session-status").textContent = "NO SESSION OPEN";
     $("session-title").textContent = "Open a session to begin";
-    $("session-time").textContent = "Go to Sessions to choose a recording. Your saved moments are in Notebook.";
+    $("session-time").textContent = "Go to Sessions to choose a recording. Your saved moments are in History.";
     $("session-video").pause();
     return;
   }
@@ -107,7 +107,8 @@ function renderSelected() {
   if (!state.detail) return;
   const statuses = [["FL events", "ready"], ["Video", session.video_status], ["EmotiBit", session.emotibit_status], ["Sync", session.sync_quality]];
   const statusBox = $("source-status"); statusBox.replaceChildren();
-  for (const [label, status] of statuses) { const pill = document.createElement("span"); pill.className = `source-pill ${status}`; pill.textContent = `${label}: ${status}`; statusBox.append(pill); }
+  for (const [label, status] of statuses) { if (["ready", "aligned_unverified"].includes(status)) continue; const pill = document.createElement("span"); pill.className = `source-pill ${status}`; pill.textContent = `${label}: ${status}`; statusBox.append(pill); }
+  statusBox.hidden = statusBox.childElementCount === 0;
   const video = $("session-video"); const videoAsset = session.assets.find((item) => item.kind === "video" && item.status === "ready"); video.hidden = !videoAsset;
   if (videoAsset) { video.src = `/api/sessions/${session.id}/video`; video.dataset.offset = videoAsset.start_offset_seconds || 0; } else { video.removeAttribute("src"); video.load(); }
   updateListenControl();
@@ -135,7 +136,7 @@ function transportMarker(event) {
 function renderTrackPicker() {
   const picker = $("track-picker"); picker.replaceChildren();
   const recording = state.detail?.status === "recording"; const streams = recording ? state.liveDescriptors.map((item) => ({ type_tag: item.track_id, display_name: item.display_name, group_name: item.group_name, unit: item.unit })) : state.detail?.signals || [];
-  if (state.selectedTrackTags === null) state.selectedTrackTags = new Set(streams.filter((item) => ["EDA", "Heart", "Temperature"].includes(item.group_name)).map((item) => item.type_tag));
+  if (state.selectedTrackTags === null) state.selectedTrackTags = new Set(streams.filter((item) => ["EDA", "Heart"].includes(item.group_name)).map((item) => item.type_tag));
   const known = new Set(streams.map((item) => item.type_tag));
   for (const tag of state.selectedTrackTags) if (!known.has(tag)) state.selectedTrackTags.delete(tag);
   for (const stream of streams) {
@@ -195,7 +196,7 @@ function renderLiveSignals() {
 // Each signal group gets a fixed accent (from the existing palette, not new
 // colors) so tracks read as distinct lanes at a glance, the way a video
 // editor color-codes audio/video/text tracks.
-const TRACK_GROUP_COLOR = { EDA: "--blue", PPG: "--purple", Temperature: "--yellow", Heart: "--red", Motion: "--green" };
+const TRACK_GROUP_COLOR = { EDA: "--sig-eda", SCR: "--sig-scr", PPG: "--sig-ppg", Temperature: "--sig-temp", Heart: "--sig-heart", Motion: "--sig-motion" };
 function trackColor(groupName) {
   const name = TRACK_GROUP_COLOR[groupName] || "--orange";
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -234,10 +235,10 @@ function drawSignals() {
     state.trackReadouts.push({ signal, unit, range, canvas, value, marker });
   }
   drawTimelineGrid(span);
-  if (state.hoverEvent) showTrackHover(state.hoverEvent);
-  const ruler = $("event-ruler"); ruler.replaceChildren();
+  if (state.hoverEvent) showTrackHover(state.hoverEvent); else showReadingsAt(state.currentTime);
+  const ruler = $("event-ruler"); ruler.replaceChildren(); state.eventMarkers = [];
   for (const event of state.timeline.events) {
-    const marker = document.createElement("button"); const transport = transportMarker(event);
+    const marker = document.createElement("button"); state.eventMarkers.push({ event, marker }); const transport = transportMarker(event);
     marker.className = transport ? `event-marker transport-marker ${transport[0]}` : "event-marker";
     if (transport) marker.textContent = transport[1];
     marker.style.left = `${(event.timeline_seconds - state.timeline.start) / span * 100}%`;
@@ -247,7 +248,7 @@ function drawSignals() {
   }
   enableIntervalDrag(ruler);
   drawTimelineRuler(span); drawPatternStrip(span); drawPatternOverlay(span);
-  updateTimelinePlayhead(); updateTimelineSelection();
+  updateTimelinePlayhead(); updatePlayheadEvent(); updateTimelineSelection();
 }
 
 function niceRulerStep(rawStep) {
@@ -301,7 +302,7 @@ function clusterHeadline(id) { return state.clusterLegend.find((item) => item.id
 // One line per suggestion: what changed, then the number the scorer compared.
 function clusterLabel(id) {
   const headline = clusterHeadline(id);
-  if (headline) return `${headline.title} · ${headline.text}`;
+  if (headline) return headline.title;
   return state.clusterLegend.find((item) => item.id === id)?.label || `pattern ${id + 1}`;
 }
 function selectedHeadline() {
@@ -324,27 +325,19 @@ function drawHeadlineMarks(row, canvas, range, headline) {
   }
 }
 
-// Cluster ids come back ranked calm(0) -> activated(last) from the backend, so
-// a fixed cool -> warm gradient means the same thing on every session: no
-// legend-memorizing required to tell "calmer" from "activated" at a glance.
-const CLUSTER_GRADIENT = [
-  [0.00, [79, 158, 234]], // calm blue
-  [0.30, [83, 211, 147]], // green
-  [0.55, [232, 197, 71]], // yellow
-  [0.75, [255, 157, 66]], // orange
-  [1.00, [255, 93, 108]], // activated red
-];
-function clusterColor(rank, total) {
-  const t = total <= 1 ? 0 : rank / (total - 1);
-  for (let i = 0; i < CLUSTER_GRADIENT.length - 1; i++) {
-    const [t0, c0] = CLUSTER_GRADIENT[i]; const [t1, c1] = CLUSTER_GRADIENT[i + 1];
-    if (t <= t1 || i === CLUSTER_GRADIENT.length - 2) {
-      const localT = Math.min(1, Math.max(0, t1 === t0 ? 0 : (t - t0) / (t1 - t0)));
-      const mix = (a, b) => Math.round(a + (b - a) * localT);
-      return `rgb(${mix(c0[0], c1[0])}, ${mix(c0[1], c1[1])}, ${mix(c0[2], c1[2])})`;
-    }
-  }
-  return "rgb(255, 93, 108)";
+// Every suggestion uses one neutral ivory; only its strength changes, so a
+// darker (more opaque) band always means a more pronounced stretch. Strength
+// comes from the scorer's own score on a fixed scale (real sessions score
+// about 0.15-1.1), so the same shade means the same thing in every session.
+const PATTERN_SCORE_RANGE = [0.15, 1.0];
+function patternStrength(id) {
+  const score = state.clusterLegend.find((item) => item.id === id)?.centroid?.score ?? PATTERN_SCORE_RANGE[0];
+  const [low, high] = PATTERN_SCORE_RANGE; return Math.min(1, Math.max(0, (score - low) / (high - low)));
+}
+const STRENGTH_WORDS = [[1 / 3, "Mild"], [2 / 3, "Clear"], [Infinity, "Strong"]];
+function strengthWord(id) { const strength = patternStrength(id); return STRENGTH_WORDS.find(([limit]) => strength < limit)[1]; }
+function patternColor(id, faint, strong) {
+  const alpha = faint + (strong - faint) * patternStrength(id); return `rgba(236, 232, 223, ${alpha.toFixed(3)})`;
 }
 
 function visiblePatternWindows() {
@@ -357,13 +350,12 @@ function visiblePatternWindows() {
 function drawPatternStrip(span) {
   const hasClusters = state.clusters.length > 0; $("pattern-toggle-button").hidden = !hasClusters; $("pattern-legend-row").hidden = !hasClusters;
   const strip = $("pattern-strip"); strip.replaceChildren(); if (!state.clustersVisible) { renderClusterLegend(); return; }
-  const total = state.clusterLegend.length;
   for (const window of visiblePatternWindows()) {
     const start = Math.max(window.start_seconds, state.timeline.start); const end = Math.min(window.end_seconds, state.timeline.end);
     const segment = document.createElement("button"); segment.className = "cluster-segment";
     segment.style.left = `${(start - state.timeline.start) / span * 100}%`; segment.style.width = `${Math.max(0, (end - start) / span * 100)}%`;
-    segment.style.background = clusterColor(window.cluster, total);
-    segment.title = `${formatTime(window.start_seconds)}–${formatTime(window.end_seconds)} · ${clusterLabel(window.cluster)}`;
+    segment.style.background = patternColor(window.cluster, .3, 1);
+    segment.title = `${formatTime(window.start_seconds)}–${formatTime(window.end_seconds)} · ${clusterLabel(window.cluster)} · ${strengthWord(window.cluster)}`;
     segment.addEventListener("click", () => applyPatternFilter(window));
     strip.append(segment);
   }
@@ -376,12 +368,12 @@ function drawPatternStrip(span) {
 // own separate row.
 function drawPatternOverlay(span) {
   const overlay = $("pattern-overlay"); overlay.replaceChildren(); if (!state.clustersVisible) return;
-  const total = state.clusterLegend.length; const { left, width } = timelineContentBox();
+  const { left, width } = timelineContentBox();
   for (const window of visiblePatternWindows()) {
     const start = Math.max(window.start_seconds, state.timeline.start); const end = Math.min(window.end_seconds, state.timeline.end);
     const band = document.createElement("div"); band.className = "pattern-band";
     band.style.left = `${left + (start - state.timeline.start) / span * width}px`; band.style.width = `${Math.max(0, (end - start) / span * width)}px`;
-    band.style.background = clusterColor(window.cluster, total);
+    band.style.background = patternColor(window.cluster, .04, .2); band.style.borderColor = patternColor(window.cluster, .2, .75);
     overlay.append(band);
   }
 }
@@ -391,22 +383,23 @@ function renderClusterLegend() {
   const used = new Set(state.clusters.map((window) => window.cluster));
   const entries = state.clustersVisible ? state.clusterLegend.filter((item) => used.has(item.id)) : [];
   legend.hidden = entries.length === 0;
-  const total = state.clusterLegend.length;
   for (const item of entries) {
     const chip = document.createElement("button"); chip.type = "button"; chip.className = "cluster-chip";
     chip.addEventListener("click", () => { const interval = state.clusters.find((window) => window.cluster === item.id); if (interval) applyPatternFilter(interval); });
-    const dot = document.createElement("i"); dot.style.background = clusterColor(item.id, total);
+    const dot = document.createElement("i"); dot.style.background = patternColor(item.id, .3, 1);
     const interval = state.clusters.find((window) => window.cluster === item.id);
     const time = document.createElement("time"); time.textContent = interval ? formatTime(interval.start_seconds).split(".")[0] : "";
     chip.classList.toggle("active", state.selectedInterval?.patternContext?.cluster_id === item.id);
+    chip.title = `${strengthWord(item.id)} change`;
     chip.append(dot, time, document.createTextNode(clusterLabel(item.id))); legend.append(chip);
   }
 }
 
 function applyPatternFilter(window) {
+  const headline = clusterHeadline(window.cluster);
   selectInterval({
-    start: window.start_seconds,
-    end: window.end_seconds,
+    start: headline ? headline.window[0] : window.start_seconds,
+    end: headline ? headline.window[1] : window.end_seconds,
     sourceType: "pattern",
     label: clusterLabel(window.cluster),
     patternContext: { label: clusterLabel(window.cluster), cluster_id: window.cluster, window_seconds: state.clusterMeta?.window_seconds, cluster_count: state.clusterLegend.length, algorithm_version: state.clusterMeta?.algorithm_version },
@@ -450,7 +443,7 @@ function nearestPoint(points, time) {
 }
 function hideTrackHover() {
   $("timeline-hover").hidden = true;
-  for (const item of state.trackReadouts || []) { item.value.textContent = ""; item.marker.hidden = true; }
+  showReadingsAt(state.currentTime);
 }
 // Hovering the signal lanes shows one shared time cursor and every track's
 // reading at that instant, so values can be compared across signals.
@@ -461,6 +454,14 @@ function showTrackHover(event) {
   const span = state.timeline.end - state.timeline.start; const time = state.timeline.start + ratio * span;
   const cursor = $("timeline-hover"); cursor.hidden = false; cursor.style.left = `${left + ratio * width}px`;
   $("timeline-hover-time").textContent = formatTime(time);
+  showReadingsAt(time);
+}
+// Every lane's reading at one instant: the hover cursor while pointing at the
+// lanes, otherwise the playhead (so scrubbing the video shows its values).
+function showReadingsAt(time) {
+  if (!state.timeline || !state.trackReadouts?.length) return;
+  const span = state.timeline.end - state.timeline.start;
+  if (time < state.timeline.start || time > state.timeline.end) { for (const item of state.trackReadouts) { item.value.textContent = ""; item.marker.hidden = true; } return; }
   const tolerance = Math.max(span * 0.01, 1.5);
   for (const item of state.trackReadouts) {
     const point = item.signal.points.length ? nearestPoint(item.signal.points, time) : null;
@@ -543,10 +544,10 @@ $("timeline-stack").addEventListener("wheel", (event) => {
 function selectInterval(interval, bookmark = null) {
   const duration = sessionDuration(state.detail); const start = Math.max(0, Math.min(duration, Number(interval.start))); const end = Math.max(start, Math.min(duration, Number(interval.end)));
   if (end - start < 0.001) return; state.selectedInterval = { ...interval, start, end }; state.selectedBookmark = bookmark;
-  const padding = Math.max(interval.sourceType === "pattern" ? 30 : 1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); loadTimeline(); renderBookmarks();
+  const padding = Math.max(interval.sourceType === "pattern" ? 30 : 1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); renderMomentCard(); loadTimeline(); renderBookmarks();
 }
 
-function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderBookmarks(); loadTimeline(); }
+function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderMomentCard(); renderBookmarks(); loadTimeline(); }
 
 function updateDurationDisplay() {
   const start = Number($("annotation-start").value), end = Number($("annotation-end").value);
@@ -574,15 +575,15 @@ function renderLabelSuggestions() {
 function renderComposer(bookmark = null) {
   const interval = state.selectedInterval; if (!interval) { $("annotation-composer").hidden = true; return; }
   const wasHidden = $("annotation-composer").hidden;
-  $("annotation-composer").hidden = false; $("annotation-origin").textContent = interval.sourceType === "pattern" ? "PATTERN SUGGESTION" : "MANUAL INTERVAL";
-  $("annotation-title").textContent = bookmark ? "Edit saved moment" : "Annotate this moment";
-  $("annotation-context").textContent = `${interval.label || "Selected interval"} · ${formatTime(interval.start)}–${formatTime(interval.end)}`;
+  $("annotation-composer").hidden = false;
+  $("annotation-title").textContent = bookmark ? "Edit saved moment" : "Save this moment";
+  $("annotation-context").textContent = `${formatTime(interval.start).split(".")[0]}–${formatTime(interval.end).split(".")[0]}`;
   $("annotation-start").value = interval.start.toFixed(3); $("annotation-end").value = interval.end.toFixed(3);
   $("annotation-start").disabled = Boolean(bookmark); $("annotation-end").disabled = Boolean(bookmark);
   updateDurationDisplay();
   $("annotation-note").value = bookmark?.note || ""; $("annotation-labels").value = bookmark?.labels.join(", ") || "";
   renderLabelSuggestions();
-  $("annotation-save").textContent = bookmark ? "Save changes" : "Save to Notebook"; $("annotation-delete").hidden = !bookmark;
+  $("annotation-save").textContent = bookmark ? "Save changes" : "Save to History"; $("annotation-delete").hidden = !bookmark;
   if (wasHidden) {
     $("annotation-composer").scrollIntoView({ behavior: "smooth", block: "nearest" });
     $("annotation-note").focus();
@@ -625,14 +626,14 @@ async function saveAnnotation(event) {
     if (state.selectedBookmark) {
       const updated = await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note, labels }) }); state.selectedBookmark = updated; state.selectedInterval.label = updated.pattern_context?.label || "Saved bookmark"; toast("Saved moment updated");
     } else {
-      const interval = state.selectedInterval; const created = await request("/api/bookmarks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: state.detail.id, start_seconds: Number($("annotation-start").value), end_seconds: Number($("annotation-end").value), note, labels, source_type: interval.sourceType, pattern_context: interval.patternContext }) }); state.selectedBookmark = created; state.selectedInterval.start = created.start_seconds; state.selectedInterval.end = created.end_seconds; toast("Moment saved to Notebook");
+      const interval = state.selectedInterval; const created = await request("/api/bookmarks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: state.detail.id, start_seconds: Number($("annotation-start").value), end_seconds: Number($("annotation-end").value), note, labels, source_type: interval.sourceType, pattern_context: interval.patternContext }) }); state.selectedBookmark = created; state.selectedInterval.start = created.start_seconds; state.selectedInterval.end = created.end_seconds; toast("Moment saved to History");
     }
     await Promise.all([loadBookmarks(), loadBookmarkLabels(), loadSessions()]); renderComposer(state.selectedBookmark);
   } catch (error) { toast(error.message); }
 }
 
 async function deleteSelectedBookmark() {
-  if (!state.selectedBookmark || !confirm("Delete this saved moment from Notebook? The session recording will remain.")) return;
+  if (!state.selectedBookmark || !confirm("Delete this saved moment from History? The session recording will remain.")) return;
   try { await request(`/api/bookmarks/${state.selectedBookmark.id}`, { method: "DELETE" }); clearIntervalSelection(); await Promise.all([loadBookmarks(), loadBookmarkLabels(), loadSessions()]); toast("Saved moment deleted"); } catch (error) { toast(error.message); }
 }
 
@@ -644,7 +645,37 @@ async function openBookmark(bookmark) {
 function seekTimeline(seconds) {
   state.currentTime = Math.max(0, Number(seconds));
   const video = $("session-video"); if (!video.hidden && Math.abs(video.currentTime - (state.currentTime - Number(video.dataset.offset || 0))) > 0.1) video.currentTime = Math.max(0, state.currentTime - Number(video.dataset.offset || 0));
-  updateTimelinePlayhead();
+  updateTimelinePlayhead(); updatePlayheadEvent(); if (!state.hoverEvent) showReadingsAt(state.currentTime);
+}
+
+// Video scrubbing drives the timeline: when the video time leaves the visible
+// window, page the window to it (keeping the zoom), one reload at a time.
+let followLoading = false, followPending = false;
+async function followVideo(video) {
+  seekTimeline(video.currentTime + Number(video.dataset.offset || 0));
+  const timeline = state.timeline; if (!timeline || state.detail?.status === "recording") return;
+  if (state.currentTime >= timeline.start && state.currentTime <= timeline.end) return;
+  if (followLoading) { followPending = true; return; }
+  followLoading = true;
+  try {
+    if (state.focusWindow) { const width = state.focusWindow.end - state.focusWindow.start; const start = Math.max(0, state.currentTime - width / 2); state.focusWindow = { start, end: start + width }; }
+    await loadTimeline();
+  } finally { followLoading = false; }
+  if (followPending) { followPending = false; followVideo(video); }
+}
+
+// The FL Studio event at (or just before) the playhead: lit on the event lane
+// and named under the video, so scrubbing shows what was happening in FL.
+function updatePlayheadEvent() {
+  const readout = $("playhead-event"); if (!readout) return;
+  let current = null;
+  for (const item of state.eventMarkers || []) { item.marker.classList.remove("current"); if (item.event.timeline_seconds <= state.currentTime + 0.05 && (!current || item.event.timeline_seconds > current.event.timeline_seconds)) current = item; }
+  const recent = current && state.currentTime - current.event.timeline_seconds <= 30 ? current : null;
+  if (recent) recent.marker.classList.add("current");
+  readout.hidden = !state.timeline || state.detail?.status === "recording";
+  if (!recent) { readout.textContent = `${formatTime(state.currentTime).split(".")[0]} · no FL Studio action in the previous 30 s`; return; }
+  const ago = state.currentTime - recent.event.timeline_seconds; const transport = transportMarker(recent.event);
+  readout.replaceChildren(Object.assign(document.createElement("time"), { textContent: formatTime(state.currentTime).split(".")[0] }), ` · FL Studio: `, Object.assign(document.createElement("strong"), { textContent: transport ? transport[2] : recent.event.summary }), ago >= 1 ? ` (${Math.round(ago)} s earlier)` : "");
 }
 
 async function synchronizeBrowserClock() {
@@ -735,6 +766,105 @@ async function loadBiosignalClusters() {
     state.clusters = result.windows; state.clusterLegend = result.clusters; state.clusterMeta = { algorithm_version: result.algorithm_version, window_seconds: result.window_seconds };
   } catch { state.clusters = []; state.clusterLegend = []; state.clusterMeta = null; }
 }
+// Moment card: one tile per signal (arrow + sparkline against the usual band)
+// and one for FL Studio activity, so a suggestion reads at a glance.
+const SIGNAL_TILES = { HR: { icon: "heart", name: "Heart rate", color: "--sig-heart" }, EA: { icon: "bolt", name: "Skin response (EDA)", color: "--sig-eda", hint: "Higher = body more tense or excited" }, T1: { icon: "thermo", name: "Temperature", color: "--sig-temp" }, TH: { icon: "thermo", name: "Temperature", color: "--sig-temp" } };
+// Tile icons share one 8x8 pixel grid ("X" = lit, "o" = highlight) so every
+// icon renders at the same whole-pixel scale (2 screen px per cell at 16 px).
+const PIXEL_ICONS = {
+  heart: [".XX..XX.", "XoXXXXXX", "XXXXXXXX", "XXXXXXXX", ".XXXXXX.", "..XXXX..", "...XX...", "........"],
+  bolt: ["....XXX.", "...XXX..", "..XXX...", ".XXXXXX.", "...XXX..", "..XXX...", ".XXX....", ".X......"],
+  thermo: ["...XX...", "...XX.X.", "...XX...", "...XX.X.", "...XX...", "..XXXX..", "..XoXX..", "..XXXX.."],
+  keys: ["X..X..XX", "X..X..XX", "X..X..XX", "X..X..XX", "XX.XX.XX", "XX.XX.XX", "XX.XX.XX", "XXXXXXXX"],
+};
+function pixelIcon(name, color) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 8 8"); svg.setAttribute("class", "pixel-icon"); svg.setAttribute("aria-hidden", "true"); svg.style.color = color;
+  PIXEL_ICONS[name].forEach((row, y) => [...row].forEach((cell, x) => {
+    if (cell === ".") return; const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    Object.entries({ x, y, width: 1, height: 1, fill: cell === "o" ? "#fff" : "currentColor", "fill-opacity": cell === "o" ? .8 : 1 }).forEach(([key, value]) => rect.setAttribute(key, value)); svg.append(rect);
+  }));
+  return svg;
+}
+// Tile icons are switched off for now; flip this to bring the pixel icons back.
+const SHOW_TILE_ICONS = false;
+function tileName(icon, color, text) { const name = document.createElement("span"); name.className = "moment-tile-name"; if (SHOW_TILE_ICONS) name.append(pixelIcon(icon, color)); name.append(text); return name; }
+const TREND_TEXT = { up2: ["↑↑", "much higher"], up: ["↑", "higher"], steady: ["→", "steady"], down: ["↓", "lower"], down2: ["↓↓", "much lower"] };
+function formatSignal(tag, value) { const decimals = tag === "HR" ? 0 : ["T1", "TH"].includes(tag) ? 1 : 2; return `${Number(value).toFixed(decimals)} ${DEFAULT_UNITS[tag] || ""}`.trim(); }
+// The grey band spans the whole sparkline, or only the 30 s before the stretch
+// when that is what the signal is compared with (skin responses).
+function drawSparkline(canvas, points, band, window, color, bandFrom = null) {
+  const ratio = window.devicePixelRatio || 1; const width = canvas.clientWidth || 200, height = canvas.clientHeight || 44;
+  canvas.width = width * ratio; canvas.height = height * ratio; const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio);
+  if (!points.length) return;
+  const start = points[0][0], end = points[points.length - 1][0], span = Math.max(1e-6, end - start);
+  const values = points.map((point) => point[1]).concat(band); const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
+  const x = (time) => (time - start) / span * width; const y = (value) => height - 3 - (value - min) / range * (height - 6);
+  const bandLeft = bandFrom === null ? 0 : Math.max(0, x(bandFrom)); const bandRight = bandFrom === null ? width : x(window[0]);
+  ctx.fillStyle = "rgba(255,255,255,.12)"; ctx.fillRect(bandLeft, y(band[1]), Math.max(1, bandRight - bandLeft), Math.max(1, y(band[0]) - y(band[1])));
+  ctx.fillStyle = "rgba(255,255,255,.08)"; ctx.fillRect(x(window[0]), 0, Math.max(1, x(window[1]) - x(window[0])), height);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
+  points.forEach(([time, value], index) => index ? ctx.lineTo(x(time), y(value)) : ctx.moveTo(x(time), y(value))); ctx.stroke();
+}
+function activityTile(start, end) {
+  const inside = state.events.filter((event) => event.timeline_seconds >= start && event.timeline_seconds < end).sort((a, b) => a.timeline_seconds - b.timeline_seconds);
+  const tile = document.createElement("div"); tile.className = "moment-tile activity";
+  const head = document.createElement("div"); head.className = "moment-tile-head"; head.append(tileName("keys", "var(--text)", "In FL Studio")); tile.append(head);
+  const icons = inside.map(transportMarker).filter(Boolean);
+  const edits = inside.filter((event) => ["pattern", "channel", "mixer", "plugin"].includes(event.category) && event.summary);
+  if (icons.length) {
+    const strip = document.createElement("div"); strip.className = "moment-transport";
+    for (const [kind, glyph, label] of icons.slice(0, 10)) { const mark = document.createElement("span"); mark.className = `transport-marker ${kind}`; mark.textContent = glyph; mark.title = label; strip.append(mark); }
+    tile.append(strip);
+  }
+  const plays = icons.filter(([kind]) => kind === "playback-start").length;
+  const lines = [];
+  if (plays > 1) lines.push(`Replayed ${plays}×`); else if (plays) lines.push("Started playback");
+  if (icons.some(([kind]) => kind === "recording-start")) lines.push("Recording on");
+  if (edits.length) lines.push(`→ ${edits[edits.length - 1].summary.replace(/^Selected /, "")}`);
+  const text = document.createElement("div"); text.className = "moment-tile-sub"; text.textContent = lines.join(" · ") || "No playback or edits";
+  tile.append(text);
+  return tile;
+}
+let momentCardToken = 0;
+async function renderMomentCard() {
+  const token = ++momentCardToken; const card = $("moment-card"); const headline = selectedHeadline();
+  card.hidden = !headline; if (!headline || !state.detail) return;
+  const [start, end] = headline.window; const sessionId = state.detail.id;
+  $("moment-card-time").textContent = `${formatTime(start).split(".")[0]}–${formatTime(end).split(".")[0]}`;
+  $("moment-card-title").textContent = headline.title;
+  const listen = $("moment-card-listen"); listen.hidden = !heartbeatSupported();
+  listen.onclick = async () => { const video = $("session-video"); if (!heartbeat.enabled) await toggleHeartbeat(true); seekTimeline(Math.max(0, start - 5)); video.scrollIntoView({ behavior: "smooth", block: "center" }); video.play().catch(() => {}); };
+  const tiles = $("moment-tiles"); tiles.replaceChildren();
+  const canvases = [];
+  for (const signal of headline.signals || []) {
+    const meta = SIGNAL_TILES[signal.tag]; if (!meta) continue;
+    const [arrow, word] = TREND_TEXT[signal.trend] || TREND_TEXT.steady;
+    const tile = document.createElement("div"); tile.className = `moment-tile${signal.flagged ? " flagged" : ""}`;
+    tile.style.setProperty("--tile-color", `var(${meta.color})`);
+    const head = document.createElement("div"); head.className = "moment-tile-head";
+    head.append(tileName(meta.icon, `var(${meta.color})`, meta.name));
+    const trend = document.createElement("span"); trend.className = `moment-trend ${signal.trend}`; trend.textContent = arrow; trend.title = word; head.append(trend);
+    const canvas = document.createElement("canvas"); canvas.className = "moment-spark";
+    const sub = document.createElement("div"); sub.className = "moment-tile-sub";
+    const compared = signal.baseline === "before" ? "before" : "usual";
+    const reading = signal.baseline === "before" && signal.trend !== "steady" ? (signal.trend.startsWith("up") ? "peak " : "low ") : "";
+    sub.textContent = signal.trend === "steady" ? `steady · ${formatSignal(signal.tag, signal.value)}` : `${reading}${formatSignal(signal.tag, signal.value)} · ${compared} ${formatSignal(signal.tag, signal.usual)}`;
+    tile.append(head, canvas, sub);
+    if (meta.hint) tile.append(Object.assign(document.createElement("div"), { className: "moment-tile-hint", textContent: meta.hint }));
+    tiles.append(tile); canvases.push([canvas, signal, meta]);
+  }
+  tiles.append(activityTile(start, end));
+  const context = 30; const params = new URLSearchParams({ start: Math.max(0, start - context), end: end + context, pixels: 240, tracks: canvases.map(([, signal]) => signal.tag).join(",") });
+  let result; try { result = await request(`/api/sessions/${sessionId}/timeline?${params}`); } catch { return; }
+  if (token !== momentCardToken) return;
+  for (const [canvas, signal, meta] of canvases) {
+    const data = result.signals.find((item) => item.type_tag === signal.tag);
+    const points = (data?.points || []).map((point) => [point[0], data.mode === "raw" ? point[1] : (point[1] + point[2]) / 2]);
+    drawSparkline(canvas, points, signal.band, headline.window, getComputedStyle(document.documentElement).getPropertyValue(meta.color).trim(), signal.baseline === "before" ? headline.window[0] - 30 : null);
+  }
+}
+
 // Heartbeat sonification: while the session video plays, synthesize a
 // "lub-dub" at the recorded heart rate so the body can be heard, not read.
 const heartbeat = { enabled: false, context: null, master: null, points: null, range: null, sessionId: null, nextBeat: null, lastTime: null, timer: null };
@@ -867,6 +997,6 @@ $("close-share-modal").addEventListener("click", () => { $("share-modal").hidden
 $("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); location.hash = "sessions"; toast("Session deleted"); });
 let zoomTimer; $("zoom").addEventListener("input", () => { state.focusWindow = null; updateZoomLabel(); clearTimeout(zoomTimer); zoomTimer = setTimeout(loadTimeline, 60); });
 $("zoom-in").addEventListener("click", () => stepZoom(0.5)); $("zoom-out").addEventListener("click", () => stepZoom(-0.5));
-$("session-video").addEventListener("timeupdate", (event) => seekTimeline(event.target.currentTime + Number(event.target.dataset.offset || 0)));
+for (const type of ["timeupdate", "seeking", "seeked"]) $("session-video").addEventListener(type, (event) => followVideo(event.target));
 const live = new EventSource("/api/live"); live.onmessage = async (message) => { const item = JSON.parse(message.data); if (item.health) { state.health = { ...state.health, ...item.health }; renderHealth(); } if (item.type === "emotibit_status") { state.health = { ...state.health, emotibit: item.emotibit }; state.liveDescriptors = item.emotibit.streams || []; renderHealth(); if (state.detail?.status === "recording") renderTrackPicker(); } if (["session_started", "session_stopped"].includes(item.type)) await refreshAll(); if (item.type === "emotibit_samples") appendLiveSamples(item); if (item.type === "event" && state.selected?.id === item.event.session_id) { state.events.unshift(item.event); if (state.detail?.status === "recording") renderLiveSignals(); } }; live.onerror = () => $("connection").classList.remove("connected");
 Promise.all([loadHealth(), loadSharing(), loadSessions(), loadBookmarkLabels()]).then(() => Promise.all([loadCloudSessions(), loadBookmarks()])).catch((error) => toast(error.message));

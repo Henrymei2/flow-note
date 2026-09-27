@@ -1,16 +1,26 @@
 :root {
   color-scheme: dark;
   /* Black piano lacquer: neutral black/white chrome; hue is reserved for status and signals. */
-  --bg: #0a0a0a;
-  --panel: #141414;
-  --panel-2: #1c1c1c;
-  --line: #2c2c2c;
-  --text: #f5f5f5;
-  --muted: #9a9a9a;
-  --accent: #f5f5f5;
-  --accent-soft: rgba(255, 255, 255, .08);
-  --accent-line: rgba(255, 255, 255, .35);
+  --bg: #080808;
+  --panel: #131313;
+  --panel-2: #1d1d1d;
+  --line: #262626;
+  --line-strong: #383838;
+  --sheen: inset 0 1px 0 rgba(255, 255, 255, .05);
+  --text: #f2f0eb;
+  --muted: #aaa8a3;
+  --accent: #ece8df;
+  --accent-hover: #ffffff;
+  --accent-soft: rgba(236, 232, 223, .07);
+  --accent-line: rgba(236, 232, 223, .3);
   --on-accent: #0a0a0a;
+  /* Signal lanes: softer, equal-brightness hues so no track shouts over another. */
+  --sig-eda: #7ea9e6;
+  --sig-scr: #62c3c7;
+  --sig-ppg: #a898e3;
+  --sig-temp: #d8b366;
+  --sig-heart: #e57a82;
+  --sig-motion: #72c39c;
   --orange: #ff7a1a;
   --green: #53d393;
   --red: #ff5d6c;
@@ -51,6 +61,9 @@ h2 { margin-bottom: 0; font-size: 18px; }
 #record-help { font-size: 12px; margin: 10px 0 0; line-height: 1.45; }
 .source-hint { color: var(--muted); font-size: 11px; line-height: 1.4; margin: 8px 0 0; }
 .button { padding: 10px 14px; background: var(--accent); font-size: 13px; }
+.button:hover, .record-button:not(.recording):not(:disabled):hover { background: var(--accent-hover); }
+.button.secondary:hover { background: #262626; border-color: var(--line-strong); }
+:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .button.secondary { color: var(--text); background: var(--panel-2); border: 1px solid var(--line); }
 .button.danger { color: var(--red); background: transparent; border: 1px solid rgba(255,93,108,.4); }
 .button:disabled, .button.disabled { pointer-events: none; opacity: .4; }
@@ -69,7 +82,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 
 /* ---------- Workspace pages ---------- */
 .workspace { max-width: 1180px; margin: auto; padding: 28px; }
-.panel { background: var(--panel); }
+.panel { background: var(--panel); box-shadow: var(--sheen); }
 .sessions-page, .notebook-page { padding: 26px 30px; border: 1px solid var(--line); border-radius: 11px; }
 .review-page { display: grid; gap: 18px; min-width: 0; }
 .page-heading { margin-bottom: 24px; max-width: 640px; }
@@ -89,7 +102,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .library-actions .import-button, .import-button { margin: 0; width: auto; }
 .session-list { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
 .session-item { width: 100%; text-align: left; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 13px; cursor: pointer; min-width: 0; }
-.session-item:hover { background: var(--panel-2); }
+.session-item:hover { background: var(--panel-2); border-color: var(--line-strong); }
 .session-item.active { background: var(--accent-soft); border-color: var(--accent-line); }
 .session-item strong, .session-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-item span { color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -116,7 +129,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .bookmark-card strong { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 13px; line-height: 1.4; }
 .bookmark-card small { display: block; margin-top: 6px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bookmark-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-.bookmark-tags span { padding: 2px 6px; border-radius: 999px; color: var(--blue); background: rgba(105,168,255,.1); font-size: 10px; }
+.bookmark-tags span { padding: 2px 6px; border-radius: 999px; color: var(--blue); background: var(--accent-soft); font-size: 10px; }
 .bookmark-open { display: block; margin-top: 10px; color: var(--accent); font-size: 12px; }
 
 /* ---------- Review page ---------- */
@@ -139,7 +152,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .review-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .toolbar-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .selection-help { margin: 0; color: var(--muted); font-size: 11px; }
-.source-pill { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; color: var(--muted); font-size: 11px; }
+.source-pill { border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; color: var(--muted); font-size: 11px; background: var(--panel-2); }
 .source-pill.ready { color: var(--green); border-color: rgba(83,211,147,.35); }
 .source-pill.recording, .source-pill.aligned_unverified { color: var(--blue); border-color: rgba(105,168,255,.35); }
 .source-pill.degraded { color: var(--accent); border-color: var(--accent-line); }
@@ -182,11 +195,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
    every lane. Pattern suggestions are not their own row: they wash the whole
    stack as a translucent color overlay sitting behind every trace (negative
    z-index), plus a slim clickable marker strip on the ruler for quick recall. */
-.timeline-stack { position: relative; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--panel); --lane-label-width: 128px; }
+.timeline-stack { position: relative; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--panel); box-shadow: var(--sheen); isolation: isolate; --lane-label-width: 128px; }
 .pattern-overlay { position: absolute; top: 23px; bottom: 0; left: 0; right: 0; z-index: -1; pointer-events: none; }
-.pattern-band { position: absolute; top: 0; bottom: 0; opacity: .25; }
+/* A faint wash with crisp edges (shade set per suggestion in app.js): the
+   stretch reads at a glance while the signal traces keep their own colors. */
+.pattern-band { position: absolute; top: 0; bottom: 0; border-inline: 1px solid transparent; }
 .timeline-grid { position: absolute; top: 23px; bottom: 0; left: 0; right: 0; z-index: 0; pointer-events: none; }
-.grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.035); }
 .timeline-row { display: grid; grid-template-columns: var(--lane-label-width) minmax(0,1fr); align-items: stretch; border-bottom: 1px solid var(--line); }
 .timeline-row:last-child { border-bottom: 0; }
 .timeline-ruler-row { background: var(--panel-2); }
@@ -213,8 +228,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .timeline-drag-preview { position: absolute; top: 23px; bottom: 0; background: var(--accent-soft); border-inline: 1px dashed var(--accent); pointer-events: none; z-index: 3; display: flex; justify-content: center; }
 .drag-duration { margin-top: 4px; height: fit-content; padding: 2px 7px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .event-ruler { position: relative; height: 22px; width: 100%; cursor: crosshair; }
-.event-marker { position: absolute; top: 5px; width: 4px; height: 12px; padding: 0; transform: translateX(-50%); border: 0; border-radius: 2px; background: var(--accent); cursor: pointer; }
-.event-marker:hover { background: var(--yellow); z-index: 2; }
+.event-marker { position: absolute; top: 5px; width: 3px; height: 12px; padding: 0; transform: translateX(-50%); border: 0; border-radius: 2px; background: var(--muted); cursor: pointer; }
+.event-marker:hover { background: var(--accent-hover); z-index: 2; }
+.event-marker.current { background: var(--accent-hover); height: 16px; top: 3px; box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent-line); z-index: 2; }
+.transport-marker.current { top: 5px; height: 12px; filter: brightness(1.35); box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--accent-line); }
+.playhead-event { margin: -4px 0 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playhead-event time { color: var(--text); font-variant-numeric: tabular-nums; }
+.playhead-event strong { color: var(--text); font-weight: 650; }
 .transport-marker, .transport-icon { display: inline-grid; place-items: center; width: 12px; height: 12px; border: 1px solid currentColor; border-radius: 3px; color: var(--text); background: var(--panel-2); font-size: 7px; font-weight: 800; font-style: normal; line-height: 1; }
 .transport-marker { top: 5px; z-index: 1; box-shadow: 0 0 0 1px var(--panel); }
 .transport-marker:hover { color: white; filter: brightness(1.25); }
@@ -222,10 +242,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .transport-marker.playback-stop, .transport-icon.playback-stop { color: #a8b9d1; background: #283345; font-size: 5px; }
 .transport-marker.recording-start, .transport-icon.recording-start { color: #ff777d; background: #4c2029; }
 .transport-marker.recording-stop, .transport-icon.recording-stop { color: #ffb57d; background: #4b3023; }
-.event-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 11px; }
-.event-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.event-legend .transport-icon { width: 11px; height: 11px; border-radius: 3px; font-size: 6px; }
-.event-legend .transport-icon.playback-stop { font-size: 5px; }
 .cluster-segment { position: absolute; top: 0; height: 100%; padding: 0; border: 0; cursor: pointer; opacity: .85; }
 .cluster-segment:hover { opacity: 1; }
 .pattern-legend-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -233,16 +249,46 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .cluster-legend { display: flex; flex-wrap: wrap; gap: 7px; }
 .cluster-legend[hidden] { display: none; }
 .cluster-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 8px; color: var(--muted); font-size: 11px; cursor: pointer; background: transparent; }
+.moment-card { display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2); }
+.moment-card[hidden] { display: none; }
+.moment-card header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.moment-card header time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.moment-card header strong { font-size: 15px; }
+.moment-card header .toggle-button { margin-left: auto; }
+.moment-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.moment-tile { display: grid; gap: 6px; align-content: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); opacity: .7; }
+.moment-tile.flagged, .moment-tile.activity { opacity: 1; }
+.moment-tile.flagged { border-color: var(--tile-color); box-shadow: inset 3px 0 0 var(--tile-color); }
+.moment-tile-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; }
+.moment-tile-name { display: inline-flex; align-items: center; gap: 7px; }
+.pixel-icon { width: 16px; height: 16px; flex-shrink: 0; shape-rendering: crispEdges; image-rendering: pixelated; }
+.moment-trend { font-size: 18px; line-height: 1; color: var(--muted); }
+.moment-trend.up, .moment-trend.up2, .moment-trend.down, .moment-trend.down2 { color: var(--tile-color, var(--text)); }
+.moment-spark { width: 100%; height: 44px; display: block; }
+.moment-tile-sub { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.moment-transport { display: flex; flex-wrap: wrap; gap: 4px; font-size: 13px; }
+.moment-transport .transport-marker { position: static; transform: none; width: 18px; height: 18px; font-size: 9px; }
+.moment-tile-hint { color: var(--muted); font-size: 10.5px; line-height: 1.35; opacity: .85; }
+.moment-card-note { margin: 0; color: var(--muted); font-size: 11px; }
 .cluster-chip time { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
 .cluster-chip.active { color: var(--text); border-color: var(--accent-line); background: var(--accent-soft); }
 .usual-band { position: absolute; background: rgba(255,255,255,.12); border-block: 1px dashed rgba(255,255,255,.35); pointer-events: none; }
 .cluster-chip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; font-style: normal; }
+.pattern-key { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.pattern-key i { width: 12px; height: 6px; border-radius: 1px; }
+.pattern-key i:first-of-type { margin-left: 5px; }
+.pattern-key i:last-of-type { margin-right: 5px; }
+/* Same alphas as patternColor(id, .3, 1) at the middle of each strength step. */
+.pattern-key .mild { background: rgba(236, 232, 223, .42); }
+.pattern-key .clear { background: rgba(236, 232, 223, .65); }
+.pattern-key .strong { background: rgba(236, 232, 223, .95); }
 .signal-tracks { display: grid; }
 .signal-track { position: relative; display: grid; grid-template-columns: var(--lane-label-width) minmax(0,1fr); align-items: center; border-bottom: 1px solid var(--line); border-left: 3px solid var(--track-color, transparent); padding: 6px 0; }
+.signal-track:nth-child(even) { background: rgba(255,255,255,.015); }
 .lane-title { display: grid; gap: 3px; }
 .lane-value { color: var(--text); font-size: 12px; white-space: nowrap; font-weight: 700; font-variant-numeric: tabular-nums; }
 .lane-value:empty { display: none; }
-.track-scale span { padding: 0 4px; border-radius: 3px; background: var(--panel); }
+.track-scale span { padding: 0 4px; border-radius: 3px; background: rgba(19,19,19,.85); }
 .track-scale { position: absolute; top: 4px; bottom: 4px; right: 4px; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; pointer-events: none; }
 .signal-track.collapsed .track-scale, .signal-track.collapsed .track-hover-dot { display: none; }
 .track-hover-dot { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; border: 2px solid var(--bg); pointer-events: none; z-index: 5; }
@@ -252,7 +298,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .signal-track.collapsed canvas { display: none; }
 .lane-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 
-.annotation-composer { border: 1px solid rgba(105,168,255,.4); border-radius: 10px; padding: 18px; display: grid; gap: 13px; background: rgba(105,168,255,.05); }
+.annotation-composer { border: 1px solid var(--line-strong); border-radius: 10px; padding: 18px; display: grid; gap: 13px; background: var(--panel-2); box-shadow: var(--sheen); }
 .annotation-composer[hidden] { display: none; }
 .annotation-heading { display: flex; justify-content: space-between; align-items: start; }
 .annotation-heading h3 { margin-bottom: 5px; }
@@ -265,7 +311,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .label-suggestion { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); border-radius: 999px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
 .label-suggestion:hover { color: var(--text); border-color: var(--muted); }
 .label-suggestion.active { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
-.composer-hint { margin: 0; color: var(--muted); font-size: 11px; }
+.interval-adjust summary { cursor: pointer; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.interval-adjust[open] summary { margin-bottom: 10px; }
+.source-status[hidden] { display: none; }
 
 
 @media (max-width: 900px) {

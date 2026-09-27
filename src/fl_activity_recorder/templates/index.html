@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FL Studio Activity Recorder</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
 </head>
 <body>
   <nav class="workspace-nav" aria-label="Workspace">
     <a href="#sessions" data-view-link="sessions">Sessions</a>
     <a href="#review" data-view-link="review">Session review</a>
-    <a href="#notebook" data-view-link="notebook">Notebook</a>
+    <a href="#notebook" data-view-link="notebook">History</a>
     <div class="connection" id="connection">
       <span class="status-dot"></span>
       <span id="connection-label">Checking FL Studio…</span>
@@ -46,10 +46,9 @@
       </details>
     </section>
 
-    <section class="notebook-page panel" id="notebook-view" aria-label="Cross-session notebook" hidden>
-      <p class="eyebrow">REFLECT & EXPLORE</p>
+    <section class="notebook-page panel" id="notebook-view" aria-label="History of saved moments" hidden>
       <div class="section-heading bookmark-heading">
-        <h2>Notebook</h2>
+        <h2>History</h2>
         <span class="count" id="bookmark-count">0</span>
       </div>
       <p class="muted notebook-intro">Search saved moments across sessions. Open a moment to review its recording, activity and signals.</p>
@@ -59,12 +58,12 @@
       </select>
       </div>
       <div id="bookmark-list" class="bookmark-list"></div>
-      <p class="empty muted" id="bookmarks-empty">Select an interval to start your notebook.</p>
+      <p class="empty muted" id="bookmarks-empty">No saved moments yet. Select an interval in a session to save one.</p>
 
     </section>
 
     <section class="review-page" id="review-view" aria-label="Session review" hidden>
-      <div class="page-heading"><a href="#sessions">Back to sessions</a><h2>Session review</h2><p class="muted">Select a suggested or custom interval, add a note, and save it to Notebook.</p></div>
+      <div class="page-heading"><a href="#sessions">Back to sessions</a><h2>Session review</h2><p class="muted">Select a suggested or custom interval, add a note, and save it to History.</p></div>
       <div class="summary panel" id="summary">
         <div>
           <p class="eyebrow" id="session-status">SELECT A SESSION</p>
@@ -89,6 +88,7 @@
           <p class="selection-help" id="selection-help">Drag to select an interval</p>
         </div>
         <video id="session-video" controls preload="metadata" hidden></video>
+        <p class="playhead-event" id="playhead-event" aria-live="polite" hidden></p>
 
         <div class="track-toolbar">
           <div id="track-picker" class="track-picker"></div>
@@ -139,40 +139,42 @@
           </div>
         </div>
 
-        <div class="event-legend" aria-label="FL Studio transport event legend">
-          <span><i class="transport-icon playback-start" aria-hidden="true">▶</i> Start playback</span>
-          <span><i class="transport-icon playback-stop" aria-hidden="true">❚❚</i> Stop playback</span>
-          <span><i class="transport-icon recording-start" aria-hidden="true">●</i> Start recording</span>
-          <span><i class="transport-icon recording-stop" aria-hidden="true">■</i> Stop recording</span>
-        </div>
-
         <div class="pattern-legend-row" id="pattern-legend-row" hidden>
           <div id="cluster-legend" class="cluster-legend" aria-label="Pattern suggestion legend"></div>
+          <div class="pattern-key" title="Brighter = bigger change in your body signals">Mild<i class="mild"></i><i class="clear"></i><i class="strong"></i>Strong</div>
         </div>
+
+        <section class="moment-card" id="moment-card" aria-label="Why this moment was suggested" hidden>
+          <header>
+            <time id="moment-card-time"></time>
+            <strong id="moment-card-title"></strong>
+            <button type="button" class="toggle-button" id="moment-card-listen" hidden>🔊 Hear it</button>
+          </header>
+          <div class="moment-tiles" id="moment-tiles"></div>
+          <p class="moment-card-note" title="Heart rate and temperature: compared with this 5-minute block · Skin response: compared with the 30 seconds just before">Grey = your usual range</p>
+        </section>
 
         <form class="annotation-composer" id="annotation-composer" hidden>
           <div class="annotation-heading">
-            <div>
-              <p class="eyebrow" id="annotation-origin">MANUAL INTERVAL</p>
-              <h3 id="annotation-title">Annotate this moment</h3>
-              <p class="muted" id="annotation-context"></p>
-            </div>
+            <h3 id="annotation-title">Save this moment</h3>
             <button class="icon-button" id="annotation-cancel" type="button" aria-label="Cancel annotation">×</button>
           </div>
-          <div class="interval-fields">
-            <label><span>Start (seconds)</span><input id="annotation-start" type="number" min="0" step="0.001" required></label>
-            <label><span>End (seconds)</span><input id="annotation-end" type="number" min="0" step="0.001" required></label>
-            <span class="interval-duration" id="annotation-duration"></span>
-          </div>
+          <details class="interval-adjust">
+            <summary><span id="annotation-context"></span> · Adjust</summary>
+            <div class="interval-fields">
+              <label><span>Start (seconds)</span><input id="annotation-start" type="number" min="0" step="0.001" required></label>
+              <label><span>End (seconds)</span><input id="annotation-end" type="number" min="0" step="0.001" required></label>
+              <span class="interval-duration" id="annotation-duration"></span>
+            </div>
+          </details>
           <label><span>Labels</span><input id="annotation-labels" type="text" list="bookmark-label-options" placeholder="e.g. overthinking, transition"></label>
           <datalist id="bookmark-label-options"></datalist>
           <div class="label-suggestions" id="label-suggestions"></div>
-          <label><span>Written note</span><textarea id="annotation-note" rows="4" required placeholder="What was happening, and how do you interpret it?"></textarea></label>
+          <label><span>Written note</span><textarea id="annotation-note" rows="3" required placeholder="What was happening here?"></textarea></label>
           <div class="summary-actions">
-            <button class="button" id="annotation-save" type="submit">Save to Notebook</button>
-            <a class="button secondary" href="#notebook">Open Notebook</a>
+            <button class="button" id="annotation-save" type="submit">Save to History</button>
+            <a class="button secondary" href="#notebook">Open History</a>
             <button class="button danger" id="annotation-delete" type="button" hidden>Delete saved moment</button>
-            <p class="composer-hint">Ctrl/Cmd+Enter to save · Esc to cancel</p>
           </div>
         </form>
       </div>
@@ -194,6 +196,6 @@
       <p class="source-hint">Anyone with this link can download the archive until it expires. Send it only through an approved research channel.</p>
     </div>
   </div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ asset_version }}"></script>
 </body>
 </html>

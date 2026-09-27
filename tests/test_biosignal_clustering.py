@@ -167,6 +167,10 @@ def test_headline_restates_the_driving_feature_in_real_units() -> None:
         assert block_start <= headline["window"][0] < headline["window"][1] <= block_end
         low, high = headline["band"]
         assert 60.0 < low <= high < 80.0
+        (heart,) = headline["signals"]
+        assert heart["tag"] == "HR" and heart["flagged"]
+        assert heart["band"] == headline["band"]
+        assert heart["trend"] in {"up", "up2", "down", "down2", "steady"}
 
 
 def test_public_scorer_handles_short_constant_and_implausible_sessions() -> None:
@@ -240,6 +244,23 @@ def test_single_temperature_channel_is_supported_and_deterministic() -> None:
     assert first == second
     assert first["windows"]
     assert all("Temperature" in cluster["label"] for cluster in first["clusters"])
+    # A temperature-driven suggestion shows a temperature tile, marked as the cause.
+    for cluster in first["clusters"]:
+        tags = [(item["tag"], item["flagged"]) for item in cluster["headline"]["signals"]]
+        assert tags == [("T1", True)]
+
+
+def test_temperature_tile_is_added_only_when_temperature_contributed() -> None:
+    """Heart rate stays as context; the contributing temperature channel is listed first."""
+    heart = _partitioned_heart_rate_points(300)
+    flat_temperature = [[index + 0.5, 32.0] for index in range(300)]
+    result = compute_biosignal_clusters(
+        _FakeSignalStore({"HR": heart, "T1": flat_temperature}), "s", 300.0  # type: ignore[arg-type]
+    )
+
+    assert result["clusters"]
+    for cluster in result["clusters"]:
+        assert [item["tag"] for item in cluster["headline"]["signals"]] == ["HR"]
 
 
 def test_movement_channels_do_not_change_suggestions() -> None:

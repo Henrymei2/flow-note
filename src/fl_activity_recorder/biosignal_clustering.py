@@ -178,20 +178,110 @@ def _headline(
     if tag == CARDIO_TAG and abs(change) > HR_GLITCH_BPM:
         text += " · possible sensor glitch"
 
-    band = None
-    if tag in series:
-        times, values = series[tag]
-        inside = values[(times >= block_start) & (times < block_end)]
-        if inside.size:
-            band = [float(v) for v in np.percentile(inside, [25.0, 75.0])]
+    window = detail["window"]
+    # Mark the signals whose scorer envelope actually contributed to this suggestion.
+    flagged = {
+        detail_item["tag"]
+        for name, detail_item in interval.details.items()
+        if interval.modality_peaks.get(name, 0) > 0
+    }
+    # Heart rate and EDA are always shown for context; temperature only when it
+    # helped pick this stretch. Contributing signals come first.
+    tags = [CARDIO_TAG, EDA_TAG, *(item for item in TEMPERATURE_TAGS if item in flagged)]
+    signals = [
+        summary
+        for other in sorted(tags, key=lambda item: item not in flagged)
+        if (summary := _signal_summary(series, other, window, block_start, block_end))
+    ]
+    for item in signals:
+        item["flagged"] = item["tag"] in flagged
+    band = next((item["band"] for item in signals if item["tag"] == tag), None)
+    if band is None and (summary := _signal_summary(series, tag, window, block_start, block_end)):
+        band = summary["band"]
     return {
         "tag": tag,
         "feature": feature,
         "title": title,
         "text": text,
-        "window": detail["window"],
+        "window": window,
         "block": [block_start, block_end],
         "band": band,
+        "signals": signals,
+    }
+
+
+# Skin-conductance responses are usually counted from about 0.05 µS upward.
+SCR_MIN_MICROSIEMENS = 0.05
+SCR_LARGE_MICROSIEMENS = 0.2
+SCR_BASELINE_SECONDS = 30.0
+
+
+def _sweat_response(
+    times: FloatArray, values: FloatArray, inside_window: FloatArray, window: list[float]
+) -> dict[str, Any] | None:
+    """Describe EDA as a quick rise or fall against the 30 s just before.
+
+    EDA drifts slowly over minutes, so a level comparison with the whole block
+    hides the short sweat responses people can see on the curve.
+    """
+    before = values[(times >= window[0] - SCR_BASELINE_SECONDS) & (times < window[0])]
+    if before.size < MIN_WINDOW_SAMPLES:
+        return None
+    low, usual, high = (float(v) for v in np.percentile(before, [25.0, 50.0, 75.0]))
+    rise = float(np.max(inside_window)) - usual
+    fall = float(np.min(inside_window)) - usual
+    if rise >= SCR_MIN_MICROSIEMENS and rise >= -fall:
+        value, trend = usual + rise, "up2" if rise >= SCR_LARGE_MICROSIEMENS else "up"
+    elif fall <= -SCR_MIN_MICROSIEMENS:
+        value, trend = usual + fall, "down2" if fall <= -SCR_LARGE_MICROSIEMENS else "down"
+    else:
+        value, trend = float(np.median(inside_window)), "steady"
+    return {
+        "tag": EDA_TAG,
+        "value": value,
+        "usual": usual,
+        "band": [low, high],
+        "trend": trend,
+        "baseline": "before",
+    }
+
+
+def _signal_summary(
+    series: dict[str, tuple[FloatArray, FloatArray]],
+    tag: str,
+    window: list[float],
+    block_start: float,
+    block_end: float,
+) -> dict[str, Any] | None:
+    """Compare one signal's level in the trigger window with its usual block level.
+
+    The usual range is the block's interquartile range (the grey band in the
+    UI); the arrow counts how far outside it the window's median sits, in
+    robust spread units, so the arrow and the band always agree.
+    """
+    if tag not in series:
+        return None
+    times, values = series[tag]
+    inside_block = values[(times >= block_start) & (times < block_end)]
+    inside_window = values[(times >= window[0]) & (times < window[1])]
+    if inside_block.size < MIN_WINDOW_SAMPLES or inside_window.size < MIN_WINDOW_SAMPLES:
+        return None
+    if tag == EDA_TAG:
+        summary = _sweat_response(times, values, inside_window, window)
+        if summary is not None:
+            return summary
+    low, usual, high = (float(v) for v in np.percentile(inside_block, [25.0, 50.0, 75.0]))
+    value = float(np.median(inside_window))
+    spread = max((high - low) / 1.349, 1e-9)
+    level = (value - usual) / spread
+    trend = "up2" if level >= 2 else "up" if level >= 1 else "down2" if level <= -2 else "down" if level <= -1 else "steady"
+    return {
+        "tag": tag,
+        "value": value,
+        "usual": usual,
+        "band": [low, high],
+        "trend": trend,
+        "baseline": "block",
     }
 
 

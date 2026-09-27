@@ -95,7 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"sessions": database.list_sessions()},
+            context={"sessions": database.list_sessions(), "asset_version": _asset_version()},
         )
 
     @app.get("/api/health")
@@ -565,6 +565,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     return app
+
+
+def _asset_version() -> str:
+    """Fingerprint the static bundle so browsers never mix old JS with new HTML."""
+    static = PACKAGE_DIR / "static"
+    return str(max(int(path.stat().st_mtime) for path in static.glob("app.*")))
 
 
 def _session_duration(session: dict[str, Any]) -> float:
