@@ -331,3 +331,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .zoom-control #zoom { width: 70px; }
   .timeline-stack { --lane-label-width: 88px; }
 }
+:root { --overlay-accent: #709d93; }
+.audition-panel { margin: 1rem 0; padding: 1rem; border: 1px solid var(--overlay-accent); border-radius: 10px; }
+.audition-list, .overlay-controls { display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; }
+.audition-list button { padding: 0.6rem; text-align: left; border-radius: 6px; cursor: pointer; }
+.audition-list button[aria-pressed="true"] { outline: 2px solid var(--overlay-accent); }
+.overlay-controls label { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.overlay-controls input[type="range"] { width: 8rem; }
+#overlay-panel { margin-top: 0.8rem; }
+#overlay-status { white-space: pre-line; }

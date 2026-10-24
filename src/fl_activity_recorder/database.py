@@ -87,6 +87,14 @@ class Database:
                     ON events(session_id, sequence, id);
                 CREATE INDEX IF NOT EXISTS events_filter
                     ON events(session_id, category, confidence);
+                CREATE TABLE IF NOT EXISTS overlays (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    audition_id TEXT NOT NULL,
+                    cache_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS diagnostics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
@@ -411,6 +419,48 @@ class Database:
         with self.transaction() as connection:
             cursor = connection.execute("DELETE FROM sessions WHERE id=?", (session_id,))
         return bool(cursor.rowcount)
+
+    def audition_sources(
+        self, session_id: str
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read complete transport evidence without the UI pagination limit."""
+        with self._lock:
+            events = self._connection.execute(
+                """SELECT * FROM events WHERE session_id=? AND
+                   (category='transport' OR action IN ('snapshot','initial_snapshot'))
+                   ORDER BY timeline_seconds, id""", (session_id,),
+            ).fetchall()
+            diagnostics = self._connection.execute(
+                "SELECT * FROM diagnostics WHERE session_id=?", (session_id,),
+            ).fetchall()
+        return ([_decode_event_row(row) for row in events],
+                [{**dict(row), "payload": json.loads(row["payload_json"])} for row in diagnostics])
+
+    def list_overlays(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Return locally owned overlay records, optionally scoped to a session."""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT metadata_json FROM overlays"
+                + (" WHERE session_id=?" if session_id else ""),
+                (session_id,) if session_id else (),
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def save_overlay(self, record: dict[str, Any]) -> None:
+        """Persist one task and its complete versioned generation metadata."""
+        with self.transaction() as connection:
+            connection.execute(
+                """INSERT INTO overlays VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET status=excluded.status,
+                   metadata_json=excluded.metadata_json""",
+                (record["overlay_id"], record["session_id"], record["audition_id"],
+                 record["cache_key"], record["status"], json.dumps(record, allow_nan=False)),
+            )
+
+    def remove_overlay(self, overlay_id: str) -> None:
+        """Remove obsolete generated metadata after its replacement is ready."""
+        with self.transaction() as connection:
+            connection.execute("DELETE FROM overlays WHERE id=?", (overlay_id,))
 
     def create_bookmark(
         self,

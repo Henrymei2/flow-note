@@ -130,6 +130,37 @@ cross-session Bookmarks notebook and reopen the original video, FL Studio events
 in context. Bookmarks stay on this device and are not included in research archives or cloud
 uploads.
 
+In a finished session, the **Auditions** list identifies separate continuous FL Studio
+playback intervals. Choose an interval of 8 seconds to 5 minutes and click **Generate Overlay**
+to create a local **Ambient Texture** WAV guided by recorded heart rate (HR) and EDA (EA).
+Enable **Original + Overlay** to compare it with the original recording; Overlay Gain defaults
+to 30%. Playback, seeking, pausing, buffering, and playback speed follow the video. Heartbeat
+listening remains independently available and can play at the same time. Added sounds share a
+limited output; original-only playback with heartbeat off retains unity gain.
+
+Overlay generation requires a complete playback interval, recorded audio that FFmpeg can decode,
+video coverage of the entire interval, and reliable HR or EA samples. Missing one physiological
+channel uses a neutral control for that channel. Incomplete intervals and known playback-event
+gaps remain unavailable. The first version provides a non-tonal ambient preset, without beat or
+harmonic analysis or inference about emotions. HR uses a robust session baseline of one-second
+sample medians; long signal gaps return gently to neutral rather than interpolating across them.
+
+FFmpeg is supplied by the `imageio-ffmpeg` platform wheel and included by the build scripts.
+Generation happens only on request, keeps the original recording and FL Studio project intact,
+and caches WAV files under the session's `overlays` directory. **Regenerate** uses a new seed;
+the last ready preview remains available if regeneration fails. Deleting a session cancels its
+generation work and removes its overlays. Overlays are not included in research archives or
+cloud uploads; restored sessions can generate their own local overlays.
+
+For development, run `python -m pytest tests/test_overlays.py` for real FFmpeg WebM decoding,
+WAV generation, cache/ownership checks, and cancellation/recovery scenarios. Before release,
+verify Chrome playback and seeking on a real recording on Windows and macOS, including audio
+unlock, buffering, rate changes, independent heartbeat mixing, five-minute memory use, and
+drift (target: at most 100 ms during ordinary local playback; not sample-accurate sync).
+`node --test tests/overlay_playback.test.cjs` additionally checks playback offsets, drift recovery,
+pause/seek, rate changes, buffering, interval boundaries, and the shared output routing using
+controlled media/audio clocks without a browser dependency.
+
 The companion blocks recording when FL Studio is still running an older observer. Run the
 installer again, then reload Activity Recorder from **View → Script output** or restart FL Studio.
 

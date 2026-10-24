@@ -29,6 +29,7 @@ from .config import Settings
 from .database import Database
 from .live_signals import EmotiBitLslReceiver, LiveSignalStore
 from .midi_receiver import MidiReceiver
+from .overlays import OverlayManager
 from .r2_storage import R2Storage, R2StorageError
 from .recorder import Recorder
 from .research_archive import ResearchArchiveError, ResearchArchiveManager
@@ -43,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     data_directory = resolved.data_directory or resolved.database_path.parent / "sessions"
     captures = CaptureManager(database, data_directory, recorder.clock)
     signals = LiveSignalStore(database, data_directory)
+    overlays = OverlayManager(database, captures, signals)
     research_archives = ResearchArchiveManager(database, data_directory)
     r2 = R2Storage(resolved)
     emotibit = EmotiBitLslReceiver(
@@ -76,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if recorder.active_session_id is not None:
                 recorder.stop_session(recorder.active_session_id, interrupted=True)
             emotibit.stop()
+            await asyncio.to_thread(overlays.close)
             database.close()
 
     app = FastAPI(title="FL Studio Activity Recorder", version=__version__, lifespan=lifespan)
@@ -84,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = resolved
     app.state.captures = captures
     app.state.signals = signals
+    app.state.overlays = overlays
     app.state.emotibit = emotibit
     app.state.research_archives = research_archives
     app.state.r2 = r2
@@ -540,10 +544,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database.get_session(session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
-        captures.delete_session_files(session_id)
-        if not database.delete_session(session_id):
-            raise HTTPException(status_code=404, detail="Session not found")
+        await asyncio.to_thread(overlays.delete_session, session_id)
         return Response(status_code=204)
+
+    @app.get("/api/sessions/{session_id}/auditions")
+    async def auditions(session_id: str) -> dict[str, Any]:
+        """List complete playback intervals and local overlay availability."""
+        try:
+            return await asyncio.to_thread(overlays.auditions, session_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Session not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/sessions/{session_id}/overlays", status_code=202)
+    async def generate_overlay(session_id: str, request: Request) -> dict[str, Any]:
+        """Queue ambient generation using only server-validated audition boundaries."""
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(422, "Expected a JSON generation request") from exc
+        if (not isinstance(payload, dict) or payload.get("preset", "ambient") != "ambient"
+                or not isinstance(payload.get("audition_id"), str)
+                or not isinstance(payload.get("regenerate", False), bool)
+                or set(payload) - {"preset", "audition_id", "regenerate"}):
+            raise HTTPException(422, "Expected audition_id, ambient preset, and regenerate boolean")
+        try:
+            return await asyncio.to_thread(overlays.request, session_id, payload["audition_id"],
+                                           payload.get("regenerate", False))
+        except KeyError as exc:
+            raise HTTPException(404, "Session not found") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/sessions/{session_id}/overlays/{overlay_id}")
+    async def get_overlay(session_id: str, overlay_id: str) -> dict[str, Any]:
+        """Read generation metadata scoped to its original session."""
+        try:
+            return overlays.public(overlays.get(session_id, overlay_id))
+        except KeyError as exc:
+            raise HTTPException(404, "Overlay not found") from exc
+
+    @app.get("/api/sessions/{session_id}/overlays/{overlay_id}/audio")
+    async def overlay_audio(session_id: str, overlay_id: str) -> FileResponse:
+        """Serve a ready overlay with framework-provided byte range support."""
+        try:
+            path = await asyncio.to_thread(overlays.audio_path, session_id, overlay_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Overlay not found") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return FileResponse(path, media_type="audio/wav")
 
     @app.get("/api/live")
     async def live(request: Request) -> StreamingResponse:
@@ -570,7 +623,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _asset_version() -> str:
     """Fingerprint the static bundle so browsers never mix old JS with new HTML."""
     static = PACKAGE_DIR / "static"
-    return str(max(int(path.stat().st_mtime) for path in static.glob("app.*")))
+    return str(max(path.stat().st_mtime_ns for path in static.iterdir()
+                   if path.suffix in {".js", ".css"}))
 
 
 def _session_duration(session: dict[str, Any]) -> float:

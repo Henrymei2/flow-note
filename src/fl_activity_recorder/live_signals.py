@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -209,6 +209,17 @@ class LiveSignalStore:
             for index in np.flatnonzero(np.isfinite(minima))
         ]
         return {"type_tag": type_tag, "mode": "minmax", "points": points}
+
+    def iter_raw(
+        self, session_id: str, type_tag: str, start: float, end: float
+    ) -> Iterator[np.ndarray[Any, Any]]:
+        """Yield copied raw sample chunks, closing each contained memory map promptly."""
+        for chunk in self.database.list_signal_chunks(session_id, type_tag, start, end):
+            array = np.load(self._contained_path(str(chunk["relative_path"])), mmap_mode="r")
+            try:
+                yield np.array(array[(array[:, 0] >= start) & (array[:, 0] <= end)], copy=True)
+            finally:
+                _close_memmap(array)
 
     def _ensure_stream(self, descriptor: SignalDescriptor) -> None:
         if descriptor.track_id in self._descriptors:

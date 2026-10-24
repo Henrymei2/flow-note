@@ -11,6 +11,7 @@ try {
         --name FLStudioActivityRecorder `
         --onefile `
         --collect-all fl_activity_recorder `
+        --collect-all imageio_ffmpeg `
         scripts/launcher.py
 } finally {
     Pop-Location

@@ -757,7 +757,7 @@ async function loadCloudSessions() { if (!state.sharing?.configured) { state.clo
 async function loadSessions() { state.sessions = await request("/api/sessions"); if (state.selected) state.selected = state.sessions.find((item) => item.id === state.selected.id) || null; renderSessions(); renderSelected(); }
 async function loadBookmarks() { const params = new URLSearchParams(); if ($("bookmark-search").value) params.set("search", $("bookmark-search").value); if ($("bookmark-label-filter").value) params.set("label", $("bookmark-label-filter").value); state.bookmarks = await request(`/api/bookmarks?${params}`); renderBookmarks(); }
 async function loadBookmarkLabels() { state.bookmarkLabels = await request("/api/bookmark-labels"); renderBookmarkLabels(); }
-async function selectSession(session) { location.hash = "review"; showWorkspaceView(); state.selected = session; state.detail = await request(`/api/sessions/${session.id}`); state.clusters = []; state.clusterMeta = null; state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; state.selectedTrackTags = null; $("annotation-composer").hidden = true; renderSessions(); renderBookmarks(); renderSelected(); await Promise.all([loadEvents(), loadBiosignalClusters()]); drawSignals(); }
+async function selectSession(session) { resetOverlayPreview(session.id); const selectionEpoch = overlayPreview.epoch; location.hash = "review"; showWorkspaceView(); state.selected = session; const detail = await request(`/api/sessions/${session.id}`); if (selectionEpoch !== overlayPreview.epoch) return; state.detail = detail; loadAuditions(detail); state.clusters = []; state.clusterMeta = null; state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; state.selectedTrackTags = null; $("annotation-composer").hidden = true; renderSessions(); renderBookmarks(); renderSelected(); await Promise.all([loadEvents(), loadBiosignalClusters()]); drawSignals(); }
 
 async function loadBiosignalClusters() {
   if (!state.detail || state.detail.status === "recording") { state.clusters = []; state.clusterLegend = []; return; }
@@ -940,11 +940,17 @@ async function toggleHeartbeat(on = !heartbeat.enabled) {
   heartbeat.enabled = on;
   $("listen-button").classList.toggle("active", on); $("listen-button").setAttribute("aria-pressed", String(on));
   clearInterval(heartbeat.timer); heartbeat.nextBeat = null; heartbeat.lastTime = null;
+  updateReviewOutput();
   if (!on) return;
-  if (!heartbeat.context) {
-    heartbeat.context = new AudioContext(); heartbeat.master = heartbeat.context.createGain();
-    heartbeat.master.connect(heartbeat.context.destination);
-  }
+  try {
+    const context = await ensureReviewAudio();
+    if (!heartbeat.enabled) return;
+    if (!heartbeat.context) {
+      heartbeat.context = context; heartbeat.master = context.createGain();
+      heartbeat.master.connect(reviewAudio.bus);
+    }
+    updateReviewOutput();
+  } catch (error) { toast(error.message); toggleHeartbeat(false); return; }
   heartbeat.master.gain.value = Number($("listen-volume").value);
   await heartbeat.context.resume();
   try { await loadHeartbeatPoints(); } catch { toast("Heart-rate data could not be loaded"); toggleHeartbeat(false); return; }
@@ -994,7 +1000,7 @@ $("cloud-share-button").addEventListener("click", async () => {
 });
 $("copy-share-link").addEventListener("click", async () => { try { await navigator.clipboard.writeText($("share-link").value); toast("Private link copied"); } catch { $("share-link").select(); toast("Select and copy the link"); } });
 $("close-share-modal").addEventListener("click", () => { $("share-modal").hidden = true; });
-$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); location.hash = "sessions"; toast("Session deleted"); });
+$("delete-button").addEventListener("click", async () => { if (!state.selected || !confirm("Permanently delete this local recording, its bookmarks, and its media?")) return; await request(`/api/sessions/${state.selected.id}`, { method: "DELETE" }); resetOverlayPreview(); state.selected = null; state.detail = null; state.events = []; clearIntervalSelection(); renderSelected(); await Promise.all([loadSessions(), loadBookmarks(), loadBookmarkLabels()]); location.hash = "sessions"; toast("Session deleted"); });
 let zoomTimer; $("zoom").addEventListener("input", () => { state.focusWindow = null; updateZoomLabel(); clearTimeout(zoomTimer); zoomTimer = setTimeout(loadTimeline, 60); });
 $("zoom-in").addEventListener("click", () => stepZoom(0.5)); $("zoom-out").addEventListener("click", () => stepZoom(-0.5));
 for (const type of ["timeupdate", "seeking", "seeked"]) $("session-video").addEventListener(type, (event) => followVideo(event.target));
