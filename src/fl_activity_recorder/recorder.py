@@ -5,6 +5,8 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import suppress
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,6 +18,19 @@ from .protocol import DecodedMessage, MessageKind
 from .timebase import TimelineClock
 
 MINIMUM_API_VERSION = 42
+MIXER_SETTLE_SECONDS = 1.0
+MIXER_CONTROLS = frozenset({"volume", "pan", "stereo_separation"})
+
+
+@dataclass
+class _PendingMixerEvent:
+    """Own one track's accumulated changes and its last real input timestamps."""
+
+    event: ActivityEvent
+    sequence: int
+    occurred_at: str
+    received: float
+    observed: float | None
 
 
 class Recorder:
@@ -39,6 +54,7 @@ class Recorder:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self.clock = clock or TimelineClock()
         self.session_stop_hook = session_stop_hook
+        self._pending_mixer: dict[str, _PendingMixerEvent] = {}
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -127,6 +143,7 @@ class Recorder:
                 clock_mode=self.clock.mode,
             )
             self.active_session_id = str(session["id"])
+            self._pending_mixer.clear()
             self.database.add_clock_sample(
                 session_id=self.active_session_id,
                 source="session_start",
@@ -169,6 +186,7 @@ class Recorder:
             if self.active_session_id != session_id:
                 raise KeyError(session_id)
             ended_lsl = timeline_end_lsl if timeline_end_lsl is not None else self.clock.now()
+            self.flush_pending_mixer_events(force=True)
             if self.session_stop_hook is not None:
                 self.session_stop_hook(session_id, ended_lsl, interrupted)
             result = self.database.finish_session(
@@ -183,8 +201,9 @@ class Recorder:
         return result
 
     def ingest(self, message: DecodedMessage) -> None:
-        now = time.monotonic()
         with self._lock:
+            now = time.monotonic()
+            self.flush_pending_mixer_events()
             if message.kind is MessageKind.HELLO:
                 restarted = self.last_sequence is not None
                 if restarted and self.active_session_id is not None:
@@ -261,39 +280,128 @@ class Recorder:
             if payload.get("category") == "navigation" and payload.get("action") == "hint":
                 return
             observed = _float_or_none(payload.pop("observed_monotonic_seconds", None))
-            source_lsl = self.clock.monotonic_to_lsl(observed) if observed is not None else None
-            session = self.database.get_session(session_id)
-            zero = _float_or_none(session.get("timeline_zero_lsl"))
-            received_lsl = self.clock.monotonic_to_lsl(now)
             event = ActivityEvent.from_payload(payload)
-            stored = self.database.add_event(
-                session_id,
-                message.sequence,
-                _utc_now(),
-                now,
-                event,
-                observed_monotonic_seconds=observed,
-                received_monotonic_seconds=now,
-                timeline_seconds=(
-                    (source_lsl if source_lsl is not None else received_lsl) - zero
-                    if zero is not None
-                    else None
-                ),
-                transport_delay_ms=(now - observed) * 1000 if observed is not None else None,
-                time_confidence="source" if observed is not None else "received",
+            captured = _PendingMixerEvent(event, message.sequence, _utc_now(), now, observed)
+            if event.category == "project" or (
+                event.category == "system" and event.action == "host_refresh"
+            ):
+                self.flush_pending_mixer_events(force=True)
+            if self._queue_mixer_event(captured):
+                return
+            if (
+                event.category == "mixer" and event.action == "track_changed"
+                and event.entity_type == "mixer_track" and event.entity_key is not None
+            ):
+                self._commit_mixer_track(event.entity_key)
+            self._store_event(captured)
+
+    def _queue_mixer_event(self, captured: _PendingMixerEvent) -> bool:
+        """Accumulate supported control diffs without postponing on repeated values."""
+        event = captured.event
+        changes = event.payload.get("changes")
+        state = event.payload.get("state")
+        if not (
+            event.category == "mixer"
+            and event.action == "track_changed"
+            and event.confidence == "state_diff"
+            and event.entity_type == "mixer_track"
+            and event.entity_key is not None
+            and isinstance(changes, dict)
+            and changes
+            and changes.keys() <= MIXER_CONTROLS
+            and isinstance(state, dict)
+            and all(
+                isinstance(change, dict)
+                and "before" in change
+                and "after" in change
+                and key in state
+                and state[key] == change["after"]
+                for key, change in changes.items()
             )
-            self._publish({"type": "event", "event": stored})
+        ):
+            return False
+        pending = self._pending_mixer.get(event.entity_key)
+        real_changes = {
+            key: change for key, change in changes.items()
+            if change["after"] != (
+                pending.event.payload["state"][key]
+                if pending is not None and key in pending.event.payload["state"]
+                else change["before"]
+            )
+        }
+        if not real_changes:
+            return True
+        event.payload = deepcopy(event.payload)
+        accumulated = deepcopy(pending.event.payload["changes"]) if pending else {}
+        for key, change in real_changes.items():
+            accumulated[key] = {
+                "before": accumulated[key]["before"] if key in accumulated else change["before"],
+                "after": change["after"],
+            }
+        event.payload["changes"] = accumulated
+        self._pending_mixer[event.entity_key] = captured
+        return True
+
+    def flush_pending_mixer_events(self, *, force: bool = False) -> None:
+        """Commit settled tracks, or all received changes at a lifecycle boundary."""
+        with self._lock:
+            now = time.monotonic()
+            for track, pending in list(self._pending_mixer.items()):
+                if force or now - pending.received >= MIXER_SETTLE_SECONDS:
+                    self._commit_mixer_track(track)
+
+    def _commit_mixer_track(self, track: str) -> None:
+        """Persist a track's net adjustment once before releasing its pending state."""
+        pending = self._pending_mixer.get(track)
+        if pending is None:
+            return
+        changes = {
+            key: change for key, change in pending.event.payload["changes"].items()
+            if change["before"] != change["after"]
+        }
+        if changes:
+            pending.event.payload["changes"] = changes
+            self._store_event(pending)
+        del self._pending_mixer[track]
+
+    def _store_event(self, captured: _PendingMixerEvent) -> None:
+        """Store and publish using original input times, excluding aggregation delay."""
+        session_id = self.active_session_id
+        if session_id is None:
+            return
+        observed = captured.observed
+        source_lsl = self.clock.monotonic_to_lsl(observed) if observed is not None else None
+        zero = _float_or_none(self.database.get_session(session_id).get("timeline_zero_lsl"))
+        received_lsl = self.clock.monotonic_to_lsl(captured.received)
+        stored = self.database.add_event(
+            session_id,
+            captured.sequence,
+            captured.occurred_at,
+            captured.received,
+            captured.event,
+            observed_monotonic_seconds=observed,
+            received_monotonic_seconds=captured.received,
+            timeline_seconds=(
+                (source_lsl if source_lsl is not None else received_lsl) - zero
+                if zero is not None else None
+            ),
+            transport_delay_ms=(captured.received - observed) * 1000
+            if observed is not None else None,
+            time_confidence="source" if observed is not None else "received",
+        )
+        self._publish({"type": "event", "event": stored})
 
     def check_heartbeat(self) -> None:
-        if self.active_session_id is not None and not self.connected:
-            session_id = self.active_session_id
-            self.database.add_diagnostic(
-                session_id=session_id,
-                level="warning",
-                code="heartbeat_timeout",
-                message="FL Studio observer connection was lost",
-            )
-            self.stop_session(session_id, interrupted=True)
+        with self._lock:
+            if self.active_session_id is not None and not self.connected:
+                session_id = self.active_session_id
+                self.database.add_diagnostic(
+                    session_id=session_id,
+                    level="warning",
+                    code="heartbeat_timeout",
+                    message="FL Studio observer connection was lost",
+                )
+                self.stop_session(session_id, interrupted=True)
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)

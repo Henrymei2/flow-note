@@ -39,6 +39,18 @@ session synchronization quality.
 
 ## Quality and validation
 
+New recordings combine consecutive mixer volume, pan, and stereo-separation changes per track.
+An adjustment is stored and displayed after its values stop changing for one second, using the
+last change's source and receipt timestamps. Intermediate values are not stored. Fields that
+return to their starting values are omitted; an adjustment with no net change produces no event.
+Other event categories and mixer selection, naming, and color changes remain immediate.
+
+Stopping a recording, losing the observer connection, or rebuilding project state commits any
+received pending adjustment immediately. A forced process termination can lose pending changes.
+This completion rule also applies to automation and approximates the end of an adjustment rather
+than detecting mouse release. MIDI state messages remain immediate, and existing recordings are
+unchanged.
+
 `aligned_unverified` means all recorded sources used valid same-host LSL timestamps and no live
 gap was detected. It does not claim measured 50 ms accuracy. A session with any EmotiBit gap is
 `degraded`.

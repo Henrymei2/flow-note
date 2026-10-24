@@ -700,6 +700,8 @@ def _normalized_labels(value: Any) -> list[str]:
 
 
 async def _heartbeat_monitor(recorder: Recorder) -> None:
+    """Flush settled mixer adjustments and detect observer connection loss."""
     while True:
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.1)
+        recorder.flush_pending_mixer_events()
         recorder.check_heartbeat()
