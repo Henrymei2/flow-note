@@ -108,7 +108,7 @@ async function loadAuditions(session) {
   }
 }
 
-/** Select an interval, seek its original video, and load only an existing cached result. */
+/** Select the audition in the timeline/bookmark composer and load its cached preview. */
 async function selectAudition(audition, button) {
   overlayPreview.epoch++;
   overlayPreview.controller.abort();
@@ -123,7 +123,13 @@ async function selectAudition(audition, button) {
   $("overlay-mix").checked = false;
   updateReviewOutput();
   $("session-video").pause();
-  seekTimeline(audition.start_time);
+  selectInterval({
+    start: audition.start_time,
+    end: audition.end_time,
+    sourceType: "manual",
+    label: "Audition segment",
+    patternContext: null,
+  });
   for (const item of $("audition-list").children) item.setAttribute("aria-pressed", String(item === button));
   $("overlay-panel").hidden = false;
   renderOverlayControls(audition.reason || "Ready to generate Ambient Texture.");
