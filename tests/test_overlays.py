@@ -27,9 +27,14 @@ from fl_activity_recorder.overlays import OverlayManager, ffmpeg_executable, ver
 
 def edge(identifier: int, timestamp: float, playing: bool) -> dict[str, Any]:
     """Build one explicit playback transition with stable source identity."""
-    return {"id": identifier, "sequence": identifier, "timeline_seconds": timestamp,
-            "category": "transport", "action": "playing_changed",
-            "payload": {"before": not playing, "after": playing}}
+    return {
+        "id": identifier,
+        "sequence": identifier,
+        "timeline_seconds": timestamp,
+        "category": "transport",
+        "action": "playing_changed",
+        "payload": {"before": not playing, "after": playing},
+    }
 
 
 @pytest.mark.parametrize("length,eligible", [(5, None), (8, True), (300, True), (301, False)])
@@ -43,8 +48,14 @@ def test_detection_boundaries_and_order(length: float, eligible: bool | None) ->
 
 def test_detection_duplicate_seek_gaps_and_incomplete() -> None:
     """Keep independent auditions and reject lost or truncated playback evidence."""
-    events = [edge(1, 1, True), edge(2, 2, True), edge(4, 11, False),
-              edge(5, 11.1, True), edge(6, 25, False), edge(7, 26, True)]
+    events = [
+        edge(1, 1, True),
+        edge(2, 2, True),
+        edge(4, 11, False),
+        edge(5, 11.1, True),
+        edge(6, 25, False),
+        edge(7, 26, True),
+    ]
     events.append({**edge(3, 5, True), "action": "seek"})
     result = detect_auditions(events, [], 40)["auditions"]
     assert [(a["start_time"], a["end_time"]) for a in result] == [(1, 11), (11.1, 25), (26, 40)]
@@ -110,12 +121,25 @@ def media(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     executable = ffmpeg_executable()
     paths = {name: directory / f"{name}.webm" for name in ("sound", "silent", "broken")}
     for name in ("sound", "silent"):
-        command = [executable, "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
-                   "color=c=black:s=32x32:r=2:d=14"]
+        command = [
+            executable,
+            "-v",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=32x32:r=2:d=14",
+        ]
         if name == "sound":
             command += ["-f", "lavfi", "-i", "sine=frequency=220:duration=14", "-c:a", "libopus"]
-        subprocess.run([*command, "-c:v", "libvpx", "-t", "14", str(paths[name])],
-                       check=True, capture_output=True, timeout=30)
+        subprocess.run(
+            [*command, "-c:v", "libvpx", "-t", "14", str(paths[name])],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
     paths["broken"].write_bytes(b"not a webm")
     return paths
 
@@ -142,26 +166,61 @@ def test_actual_audio_decode(media: dict[str, Path], monkeypatch: pytest.MonkeyP
 
 def populate(database: Database, signals: LiveSignalStore, video: Path, root: Path) -> str:
     """Persist a finished session through authentic event and signal storage interfaces."""
-    session = database.create_session(project_title="Overlay", fl_version="26", api_version=42,
-                                      recorder_version="test", timeline_zero_lsl=1000)
+    session = database.create_session(
+        project_title="Overlay",
+        fl_version="26",
+        api_version=42,
+        recorder_version="test",
+        timeline_zero_lsl=1000,
+    )
     session_id = str(session["id"])
     for item in (edge(1, 1, True), edge(2, 11, False)):
-        database.add_event(session_id, item["sequence"], "2026-01-01", 0,
-                           ActivityEvent(category="transport", action="playing_changed",
-                                         summary="Playback", confidence="state_diff",
-                                         payload=item["payload"]),
-                           timeline_seconds=item["timeline_seconds"])
+        database.add_event(
+            session_id,
+            item["sequence"],
+            "2026-01-01",
+            0,
+            ActivityEvent(
+                category="transport",
+                action="playing_changed",
+                summary="Playback",
+                confidence="state_diff",
+                payload=item["payload"],
+            ),
+            timeline_seconds=item["timeline_seconds"],
+        )
+    database.add_event(
+        session_id,
+        0,
+        "2026-01-01",
+        0,
+        ActivityEvent(
+            category="transport",
+            action="initial_snapshot",
+            summary="Initial",
+            confidence="state_diff",
+            payload={"playing": False, "tempo": 120.0},
+        ),
+        timeline_seconds=0,
+    )
     signals.start_session(session_id, 1000)
-    descriptor = SignalDescriptor("HR", "HR", "Heart rate", "Heart", "bpm", 1,
-                                  "EmotiBit-HR", "device", 0, "1")
+    descriptor = SignalDescriptor(
+        "HR", "HR", "Heart rate", "Heart", "bpm", 1, "EmotiBit-HR", "device", 0, "1"
+    )
     signals.append(descriptor, list(range(1000, 1015)), [70] * 15)
     signals.finish_session(1014, interrupted=False, degraded=False)
     path = root / session_id / "video" / "capture.webm"
     path.parent.mkdir(parents=True)
     path.write_bytes(video.read_bytes())
-    database.upsert_asset(session_id, "video", "ready", relative_path=str(path.relative_to(root)),
-                          duration_seconds=14, start_offset_seconds=0,
-                          metadata_json={"has_audio": False})
+    database.upsert_asset(
+        session_id,
+        "video",
+        "ready",
+        relative_path=str(path.relative_to(root)),
+        duration_seconds=14,
+        start_offset_seconds=0,
+        metadata_json={"has_audio": False},
+    )
     database.finish_session(session_id, "completed", timeline_end_lsl=1014)
     return session_id
 
@@ -178,12 +237,15 @@ def wait_ready(manager: OverlayManager, session_id: str, overlay_id: str) -> dic
 
 
 def test_api_cache_regeneration_and_ownership(
-    tmp_path: Path, media: dict[str, Path], monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    media: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Generate and range-serve real audio; preserve old results when replacement fails."""
     root = tmp_path / "sessions"
-    app = create_app(Settings(database_path=tmp_path / "db.sqlite", data_directory=root,
-                              enable_midi=False))
+    app = create_app(
+        Settings(database_path=tmp_path / "db.sqlite", data_directory=root, enable_midi=False)
+    )
     db = app.state.database
     manager = app.state.overlays
     try:
@@ -229,11 +291,14 @@ def test_api_cache_regeneration_and_ownership(
 
 
 def test_delete_cancels_deduplicated_generation(
-    tmp_path: Path, media: dict[str, Path], monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    media: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancel an active worker before its session files are deleted or published."""
-    app = create_app(Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data",
-                              enable_midi=False))
+    app = create_app(
+        Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data", enable_midi=False)
+    )
     manager = app.state.overlays
     entered = threading.Event()
 
@@ -264,8 +329,9 @@ def test_delete_cancels_deduplicated_generation(
 
 def test_complete_event_read_and_restart_recovery(tmp_path: Path, media: dict[str, Path]) -> None:
     """Read beyond UI limits and recover interrupted tasks without losing ready audio."""
-    app = create_app(Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data",
-                              enable_midi=False))
+    app = create_app(
+        Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data", enable_midi=False)
+    )
     manager = app.state.overlays
     db = app.state.database
     try:
@@ -275,11 +341,11 @@ def test_complete_event_read_and_restart_recovery(tmp_path: Path, media: dict[st
                 """INSERT INTO events (session_id, sequence, occurred_at, monotonic_seconds,
                    category, action, summary, confidence, payload_json, timeline_seconds)
                    VALUES (?, ?, 'test', 0, 'transport', 'tempo_changed', 'Tempo',
-                   'state_diff', '{}', 0.5)""",
+                   'state_diff', '{"before":120,"after":120}', 0.5)""",
                 [(session_id, index) for index in range(3, 10010)],
             )
         events, _ = db.audition_sources(session_id)
-        assert len(events) == 10009
+        assert len(events) == 10010
         audition_id = manager.auditions(session_id)["auditions"][0]["id"]
         generated = manager.request(session_id, audition_id, False)
         record = wait_ready(manager, session_id, generated["overlay_id"])
@@ -302,8 +368,9 @@ def test_complete_event_read_and_restart_recovery(tmp_path: Path, media: dict[st
 
 def test_audio_coverage_and_no_physiology(tmp_path: Path, media: dict[str, Path]) -> None:
     """Reject out-of-video intervals and missing physiology without trusting capture flags."""
-    app = create_app(Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data",
-                              enable_midi=False))
+    app = create_app(
+        Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data", enable_midi=False)
+    )
     manager = app.state.overlays
     db = app.state.database
     try:
@@ -320,3 +387,276 @@ def test_audio_coverage_and_no_physiology(tmp_path: Path, media: dict[str, Path]
     finally:
         manager.close()
         db.close()
+
+
+def tempo_event(identifier: int, timestamp: float, value: Any, before: Any = 120) -> dict[str, Any]:
+    """Build explicit tempo evidence without a DAW connection."""
+    return {
+        "id": identifier,
+        "timeline_seconds": timestamp,
+        "action": "tempo_changed",
+        "payload": {"before": before, "after": value},
+    }
+
+
+@pytest.mark.parametrize(
+    "events,expected",
+    [
+        ([tempo_event(1, 0, 120)], 120),
+        ([tempo_event(1, 0, 120), tempo_event(2, 5, 120)], 120),
+        ([tempo_event(1, 0, 120), tempo_event(2, 1, 130)], 130),
+        ([tempo_event(1, 0, 120), tempo_event(2, 11, 130)], 120),
+        (
+            [
+                {
+                    "id": 1,
+                    "timeline_seconds": 0,
+                    "action": "initial_snapshot",
+                    "payload": {"tempo": 98},
+                }
+            ],
+            98,
+        ),
+    ],
+)
+def test_constant_audition_tempo(events: list[dict[str, Any]], expected: float) -> None:
+    """Recover start evidence, accepting repeated values and excluding the stop boundary."""
+    from fl_activity_recorder.audition_detection import audition_tempo
+
+    assert audition_tempo(events, 1, 11) == expected
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [tempo_event(1, 3, 120)],
+        [tempo_event(1, 0, 120), tempo_event(2, 5, 130)],
+        [tempo_event(1, 0, 120), tempo_event(2, 5, 130), tempo_event(3, 6, 120, 130)],
+        [tempo_event(1, 0, 120), tempo_event(2, 5, 120, 90)],
+        [
+            tempo_event(1, 0, 120),
+            {"id": 2, "timeline_seconds": 4, "action": "snapshot", "payload": {"tempo": 90}},
+        ],
+    ],
+)
+def test_unreliable_or_changing_tempo(events: list[dict[str, Any]]) -> None:
+    """A temporary tempo change or contradictory snapshot disables the entire interval."""
+    from fl_activity_recorder.audition_detection import audition_tempo
+
+    with pytest.raises(ValueError, match="BPM"):
+        audition_tempo(events, 1, 11)
+
+
+def test_temperature_preference_and_mapping(tmp_path: Path) -> None:
+    """Use one reliable temperature sensor, and fall back conservatively across gaps."""
+    store: Any = RawSignals(
+        {
+            "T1": [[i, 30 + i * 0.05] for i in range(101)],
+            "TH": [[i, 29 - i * 0.05] for i in range(101)],
+        }
+    )
+    curves, valid = controls(store, "s", 80, 90, 100)
+    assert valid["T1"] and valid["TH"] and not valid["HR"]
+    assert curves[-1, 2] > 0.5
+    store.series["T1"] = [[80, 32], [90, 33]]
+    fallback, valid = controls(store, "s", 80, 90, 100)
+    assert not valid["T1"] and valid["TH"]
+    assert fallback[-1, 2] < 0.5
+    path = tmp_path / "temperature.wav"
+    generate_ambient(path, 10, curves, 0, threading.Event())
+    first = path.read_bytes()
+    curves[:, 2] = 0.2
+    generate_ambient(path, 10, curves, 0, threading.Event())
+    assert first != path.read_bytes()
+
+
+def test_hr_drum_grid_and_stem_audio(tmp_path: Path) -> None:
+    """HR affects density and velocity, preserving eighth-note grid and bounded PCM."""
+    from fl_activity_recorder.overlay_generator import drum_events, generate_drums
+
+    low, high = np.full((101, 3), 0.3), np.full((101, 3), 0.7)
+    quiet, intense = drum_events(10, low, 123), drum_events(10, high, 123)
+    assert len(intense) > len(quiet)
+    assert intense[0][2] > quiet[0][2]
+    assert all(abs(at * 123 / 30 - round(at * 123 / 30)) < 1e-8 for at, _, _ in intense)
+    paths = [tmp_path / f"drums-{i}.wav" for i in range(3)]
+    for path, seed in zip(paths, (42, 42, 43), strict=True):
+        generate_drums(path, 10.031, high, 123, seed, threading.Event())
+    assert paths[0].read_bytes() == paths[1].read_bytes()
+    assert paths[0].read_bytes() != paths[2].read_bytes()
+    with wave.open(str(paths[0])) as audio:
+        assert audio.getnframes() == round(10.031 * 48000)
+        samples = np.frombuffer(audio.readframes(audio.getnframes()), dtype="<i2")
+        assert 0 < np.max(np.abs(samples)) <= 0.16 * 32767
+    cancelled = threading.Event()
+    cancelled.set()
+    with pytest.raises(RuntimeError, match="cancelled"):
+        generate_drums(tmp_path / "cancelled.wav", 10, high, 123, 0, cancelled)
+
+
+def test_combined_stems_cache_restart_and_failure(
+    tmp_path: Path,
+    media: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publish complete stem sets; reuse controls and preserve ready audio after failure."""
+    app = create_app(
+        Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data", enable_midi=False)
+    )
+    manager, db = app.state.overlays, app.state.database
+    try:
+        session_id = populate(db, app.state.signals, media["sound"], manager.captures.root)
+        item = manager.auditions(session_id)["auditions"][0]
+        # The UI eligibility pass already computed the controls and checked audio.
+        with monkeypatch.context() as scoped:
+
+            def unexpected(*args: Any, **kwargs: Any) -> None:
+                raise AssertionError("Unchanged inputs must reuse validation and feature caches")
+
+            scoped.setattr("fl_activity_recorder.overlays.controls", unexpected)
+            scoped.setattr("fl_activity_recorder.overlays.verify_audio", unexpected)
+            response = manager.request(session_id, item["id"], False, "physiological")
+            record = wait_ready(manager, session_id, response["overlay_id"])
+            assert record["status"] == "ready", record
+            assert record["stems"] == ["ambient", "drums"] and record["bpm"] == 120
+            assert record["spatial"]["values"] == []  # HR-only input has no wet effect.
+            assert (
+                manager.request(session_id, item["id"], False, "physiological")["overlay_id"]
+                == record["overlay_id"]
+            )
+        client = TestClient(app)
+        url = f"/api/sessions/{session_id}/overlays/{record['overlay_id']}/audio"
+        assert client.get(url + "?stem=drums", headers={"Range": "bytes=0-43"}).status_code == 206
+        assert client.get(url + "?stem=unknown").status_code == 409
+        assert "stem_paths" not in manager.public(record)
+        assert (
+            manager.auditions(session_id)["auditions"][0]["overlay"]["overlay_id"]
+            == record["overlay_id"]
+        )
+        paths = [
+            manager.audio_path(session_id, record["overlay_id"], stem) for stem in record["stems"]
+        ]
+        with monkeypatch.context() as scoped:
+
+            def fail(*args: Any, **kwargs: Any) -> None:
+                raise ValueError("drum render failed")
+
+            scoped.setattr("fl_activity_recorder.overlays.generate_drums", fail)
+            replacement = manager.request(session_id, item["id"], True, "physiological")
+            assert wait_ready(manager, session_id, replacement["overlay_id"])["status"] == "failed"
+            assert all(path.exists() for path in paths)
+            assert not list(paths[0].parent.glob("*.tmp"))
+        manager.close()
+        manager = OverlayManager(db, manager.captures, app.state.signals)
+        assert all(path.exists() for path in paths)
+        manager.audio_path(session_id, record["overlay_id"], "drums").unlink()
+        replacement = manager.request(session_id, item["id"], False, "physiological")
+        assert replacement["status"] in {"pending", "generating"}
+        assert wait_ready(manager, session_id, replacement["overlay_id"])["status"] == "ready"
+        manager.delete_session(session_id)
+        assert not paths[0].parent.exists()
+    finally:
+        manager.close()
+        db.close()
+
+
+def test_temperature_fingerprint_and_requested_interval_only(
+    tmp_path: Path,
+    media: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Temperature edits invalidate caches; a POST validates only its target interval."""
+    app = create_app(
+        Settings(database_path=tmp_path / "db", data_directory=tmp_path / "data", enable_midi=False)
+    )
+    manager, db = app.state.overlays, app.state.database
+    try:
+        session_id = populate(db, app.state.signals, media["sound"], manager.captures.root)
+        detected, fingerprint, _ = manager._sources(session_id)
+        audition_id = detected["auditions"][0]["id"]
+        with monkeypatch.context() as scoped:
+
+            def unexpected(*args: Any) -> None:
+                raise AssertionError("POST must not validate the entire audition list")
+
+            scoped.setattr(manager, "auditions", unexpected)
+            response = manager.request(session_id, audition_id, False, "physiological")
+            first = wait_ready(manager, session_id, response["overlay_id"])
+        assert first["status"] == "ready"
+        # Add temperature without changing the playback interval or original audio.
+        store = app.state.signals
+        store.start_session(session_id, 1000)
+        descriptor = SignalDescriptor(
+            "T1", "T1", "Temperature", "Temperature", "°C", 1, "EmotiBit-T1", "device", 0, "1"
+        )
+        store.append(descriptor, list(range(1000, 1015)), [32 + i * 0.01 for i in range(15)])
+        store.finish_session(1014, interrupted=False, degraded=False)
+        assert manager._sources(session_id)[1] != fingerprint
+        assert manager.auditions(session_id)["auditions"][0]["overlay"] is None
+        response = manager.request(session_id, audition_id, False, "physiological")
+        second = wait_ready(manager, session_id, response["overlay_id"])
+        assert second["status"] == "ready"
+        assert second["temperature_source"] == "T1"
+        assert second["overlay_id"] != first["overlay_id"]
+        assert not list(manager._directory(session_id).glob("*.tmp"))
+        # Legacy requests still work if historical recordings lack BPM evidence.
+        with db.transaction() as connection:
+            connection.execute(
+                "DELETE FROM events WHERE session_id=? AND action='initial_snapshot'", (session_id,)
+            )
+        historical = manager.auditions(session_id)["auditions"][0]
+        assert historical["eligible"] and historical["bpm"] == 100
+        assert historical["bpm_source"] == "default"
+        fallback = manager.request(session_id, audition_id, False, "physiological")
+        fallback = wait_ready(manager, session_id, fallback["overlay_id"])
+        assert fallback["status"] == "ready"
+        assert fallback["bpm"] == 100 and fallback["bpm_source"] == "default"
+        legacy = manager.request(session_id, audition_id, False, "ambient")
+        assert wait_ready(manager, session_id, legacy["overlay_id"])["status"] == "ready"
+    finally:
+        manager.close()
+        db.close()
+
+
+def test_eda_trend_and_long_gap_controls() -> None:
+    """EDA trend affects wet controls; unsupported gaps return gently to neutral."""
+    store: Any = RawSignals({"EA": [[i, 1 + i * 0.02] for i in range(101)]})
+    curves, valid = controls(store, "s", 70, 90, 100)
+    assert valid["EA"] and curves[-1, 1] > 0.5
+    store.series["EA"] = [[i, 1 + i * 0.02] for i in range(101) if not 78 <= i <= 84]
+    gaps, valid = controls(store, "s", 70, 90, 100)
+    assert valid["EA"]  # Sufficient coverage remains on both sides of the gap.
+    assert abs(gaps[140, 1] - 0.5) < abs(gaps[70, 1] - 0.5)
+
+
+def test_invalid_preset_shape_returns_422(tmp_path: Path) -> None:
+    """Malformed JSON preset values must never trigger a server type error."""
+    app = create_app(Settings(database_path=tmp_path / "db", enable_midi=False))
+    try:
+        client = TestClient(app)
+        for value in ({}, [], 12, None):
+            assert (
+                client.post(
+                    "/api/sessions/missing/overlays", json={"audition_id": "a", "preset": value}
+                ).status_code
+                == 422
+            )
+    finally:
+        app.state.overlays.close()
+        app.state.database.close()
+
+
+@pytest.mark.parametrize("events", [
+    [],
+    [tempo_event(1, 0, True)],
+    [tempo_event(1, 0, 0)],
+    [tempo_event(1, 0, 120), tempo_event(2, 0.5, None)],
+    [{"id": 1, "timeline_seconds": 0, "action": "initial_snapshot", "payload": {}}],
+])
+def test_historical_tempo_defaults_are_labelled(events: list[dict[str, Any]]) -> None:
+    """Missing historical tempo uses 100, without claiming it was recorded."""
+    from fl_activity_recorder.audition_detection import audition_tempo, resolve_audition_tempo
+
+    assert audition_tempo(events, 1, 11) == 100
+    assert resolve_audition_tempo(events, 1, 11) == (100, "default")
+    assert resolve_audition_tempo([tempo_event(1, 0, 100)], 1, 11) == (100, "recorded")

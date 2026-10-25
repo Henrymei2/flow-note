@@ -131,35 +131,52 @@ in context. Bookmarks stay on this device and are not included in research archi
 uploads.
 
 In a finished session, the **Auditions** list identifies separate continuous FL Studio
-playback intervals. Choose an interval of 8 seconds to 5 minutes and click **Generate Overlay**
-to create a local **Ambient Texture** WAV guided by recorded heart rate (HR) and EDA (EA).
-Enable **Original + Overlay** to compare it with the original recording; Overlay Gain defaults
-to 30%. Playback, seeking, pausing, buffering, and playback speed follow the video. Heartbeat
-listening remains independently available and can play at the same time. Added sounds share a
-limited output; original-only playback with heartbeat off retains unity gain.
+playback intervals. Choose an interval of 8 seconds to 5 minutes and click **Generate Overlay**.
+The local **Physiological Overlay** combines three mappings:
 
-Overlay generation requires a complete playback interval, recorded audio that FFmpeg can decode,
-video coverage of the entire interval, and reliable HR or EA samples. Missing one physiological
-channel uses a neutral control for that channel. Incomplete intervals and known playback-event
-gaps remain unavailable. The first version provides a non-tonal ambient preset, without beat or
-harmonic analysis or inference about emotions. HR uses a robust session baseline of one-second
-sample medians; long signal gaps return gently to neutral rather than interpolating across them.
+- **HR → drums:** soft synthesized kick, tap and shaker follow recorded FL Studio BPM.
+  Heart rate relative to the session baseline controls velocity and eighth-note fills.
+- **EDA → space:** smoothed skin response controls a short stereo reverb on the original
+  recording as well as the added sounds. Missing EDA leaves the mix dry.
+- **Temperature → background:** temperature relative to the session baseline controls the
+  brightness and level of a non-tonal noise texture. Reliable T1 takes priority over TH.
 
+Enable **Original + Overlay** to compare with the original. **Drums**, **Background**, and
+**Space** have separate controls, each initially 30%; changing them never regenerates audio.
+Playback, seeking, pausing, buffering, and playback speed follow the video. Overlay and the
+separate heartbeat listener are mutually exclusive. Original-only playback with heartbeat off
+retains unity gain; mixed playback has a shared output limiter.
+
+Generation requires a complete interval, full recorded-audio coverage verified with FFmpeg,
+at least one reliable HR, EA, T1 or TH channel, and no recorded BPM changes. Historical
+intervals without recorded BPM temporarily use **100 BPM**, labelled as a default in the UI.
+Recorded BPM takes priority. Contradictory tempo evidence and playback-event gaps disable generation
+with an explanation. The generated beat grid starts at the audition boundary. Preview initially delays drums by
+half a beat (300 ms at 100 BPM) to compensate for the observed early beat phase. Use
+**Drum timing** to adjust from one beat earlier to one beat later without regenerating;
+positive values mean later. The adjustment affects only drums and follows seeking and speed changes. No harmonic analysis or emotional inference is performed.
+Missing HR uses a fixed gentle rhythm; missing temperature uses a fixed background texture.
+Long physiological gaps return gently to neutral rather than being interpolated across.
+
+The backend streams separate 48 kHz stereo PCM WAV stems and caches versioned controls and
+results under the session's `overlays` directory. EDA reverb runs in Web Audio during preview,
+so the original recording does not need another offline render. SciPy batch filters and cached
+source validation replace per-sample Python filtering and repeated full-session feature work.
 FFmpeg is supplied by the `imageio-ffmpeg` platform wheel and included by the build scripts.
-Generation happens only on request, keeps the original recording and FL Studio project intact,
-and caches WAV files under the session's `overlays` directory. **Regenerate** uses a new seed;
-the last ready preview remains available if regeneration fails. Deleting a session cancels its
-generation work and removes its overlays. Overlays are not included in research archives or
-cloud uploads; restored sessions can generate their own local overlays.
 
-For development, run `python -m pytest tests/test_overlays.py` for real FFmpeg WebM decoding,
-WAV generation, cache/ownership checks, and cancellation/recovery scenarios. Before release,
-verify Chrome playback and seeking on a real recording on Windows and macOS, including audio
-unlock, buffering, rate changes, independent heartbeat mixing, five-minute memory use, and
-drift (target: at most 100 ms during ordinary local playback; not sample-accurate sync).
-`node --test tests/overlay_playback.test.cjs` additionally checks playback offsets, drift recovery,
-pause/seek, rate changes, buffering, interval boundaries, and the shared output routing using
-controlled media/audio clocks without a browser dependency.
+Generation is explicit and keeps the original recording and FL Studio project intact.
+**Regenerate** uses a new seed; a failed replacement preserves the last ready preview.
+Session deletion cancels generation and removes every stem. Overlays are not included in
+research archives or cloud uploads; restored sessions generate their own local overlays.
+Legacy API clients can still request `ambient`; the new UI requests `physiological` and does
+not reuse legacy ambient previews.
+
+Run `python -m pytest tests/test_overlays.py` for audio, tempo, physiology, cache and lifecycle
+tests, and `node --test tests/overlay_playback.test.cjs` for synchronized stems, routing,
+independent gains, and effect cleanup. Before release, audition real recordings on Windows
+and macOS, checking subjective balance and beat phase. Ordinary local playback targets
+at most 100 ms drift, not sample-accurate sync.
+See [implementation notes and measured performance](docs/physiological-overlays.md).
 
 The companion blocks recording when FL Studio is still running an older observer. Run the
 installer again, then reload Activity Recorder from **View → Script output** or restart FL Studio.

@@ -559,19 +559,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/overlays", status_code=202)
     async def generate_overlay(session_id: str, request: Request) -> dict[str, Any]:
-        """Queue ambient generation using only server-validated audition boundaries."""
+        """Queue a versioned preset using only server-validated audition boundaries."""
         try:
             payload = await request.json()
         except json.JSONDecodeError as exc:
             raise HTTPException(422, "Expected a JSON generation request") from exc
-        if (not isinstance(payload, dict) or payload.get("preset", "ambient") != "ambient"
-                or not isinstance(payload.get("audition_id"), str)
-                or not isinstance(payload.get("regenerate", False), bool)
-                or set(payload) - {"preset", "audition_id", "regenerate"}):
-            raise HTTPException(422, "Expected audition_id, ambient preset, and regenerate boolean")
+        if (
+            not isinstance(payload, dict)
+            or payload.get("preset", "ambient") not in ("ambient", "physiological")
+            or not isinstance(payload.get("audition_id"), str)
+            or not isinstance(payload.get("regenerate", False), bool)
+            or set(payload) - {"preset", "audition_id", "regenerate"}
+        ):
+            raise HTTPException(
+                422, "Expected audition_id, ambient or physiological preset, and regenerate boolean"
+            )
         try:
-            return await asyncio.to_thread(overlays.request, session_id, payload["audition_id"],
-                                           payload.get("regenerate", False))
+            return await asyncio.to_thread(
+                overlays.request,
+                session_id,
+                payload["audition_id"],
+                payload.get("regenerate", False),
+                payload.get("preset", "ambient"),
+            )
         except KeyError as exc:
             raise HTTPException(404, "Session not found") from exc
         except ValueError as exc:
@@ -588,10 +598,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Overlay not found") from exc
 
     @app.get("/api/sessions/{session_id}/overlays/{overlay_id}/audio")
-    async def overlay_audio(session_id: str, overlay_id: str) -> FileResponse:
+    async def overlay_audio(
+        session_id: str, overlay_id: str, stem: str = "ambient"
+    ) -> FileResponse:
         """Serve a ready overlay with framework-provided byte range support."""
         try:
-            path = await asyncio.to_thread(overlays.audio_path, session_id, overlay_id)
+            path = await asyncio.to_thread(overlays.audio_path, session_id, overlay_id, stem)
         except KeyError as exc:
             raise HTTPException(404, "Overlay not found") from exc
         except ValueError as exc:

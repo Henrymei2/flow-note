@@ -7,6 +7,7 @@ from typing import Any
 
 MIN_DURATION = 8.0
 MAX_DURATION = 300.0
+DEFAULT_BPM = 100.0
 
 
 def detect_auditions(
@@ -79,3 +80,61 @@ def detect_auditions(
             "eligible": False, "reason": "Playback has no recorded stop",
         })
     return {"auditions": items, "diagnostics": warnings}
+
+
+def resolve_audition_tempo(
+    events: list[dict[str, Any]], start: float, end: float
+) -> tuple[float, str]:
+    """Resolve recorded tempo or label a temporary fallback when evidence is absent."""
+    current: float | None = None
+    selected: float | None = None
+    for event in sorted(events, key=lambda e: (e.get("timeline_seconds") or 0, e["id"])):
+        timestamp = event.get("timeline_seconds")
+        if timestamp is None or not math.isfinite(timestamp) or timestamp < 0 or timestamp >= end:
+            continue
+        payload = event["payload"]
+        action = event["action"]
+        if action in {"snapshot", "initial_snapshot"} and "tempo" in payload:
+            value = payload["tempo"]
+        elif action == "tempo_changed":
+            value = payload.get("after")
+            before = payload.get("before")
+            if (
+                timestamp > start
+                and current is not None
+                and before is not None
+                and before != current
+            ):
+                raise ValueError("Conflicting BPM evidence in this audition")
+        else:
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or not 10 <= value <= 522
+        ):
+            current = None
+            selected = None
+            if timestamp >= start:
+                raise ValueError("BPM is missing or invalid in this audition")
+            continue
+        value = float(value)
+        if timestamp > start:
+            if selected is None:
+                selected = current
+            if selected is None:
+                raise ValueError("No reliable BPM at the start of this audition")
+            if value != selected:
+                raise ValueError("BPM changes during this audition")
+        current = value
+        if timestamp <= start:
+            selected = value
+    if selected is None:
+        return DEFAULT_BPM, "default"
+    return selected, "recorded"
+
+
+def audition_tempo(events: list[dict[str, Any]], start: float, end: float) -> float:
+    """Return constant recorded BPM, or 100 BPM for historical intervals without tempo."""
+    return resolve_audition_tempo(events, start, end)[0]

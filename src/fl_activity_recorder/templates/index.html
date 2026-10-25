@@ -94,15 +94,19 @@
           <p id="audition-status" role="status">Choose a finished session to find auditions.</p>
           <div id="audition-list" class="audition-list"></div>
           <div id="overlay-panel" hidden>
-            <p><strong>Ambient Texture</strong> · A non-tonal layer guided by recorded HR and EDA</p>
+            <p><strong>Physiological Overlay</strong> · HR → drums · EDA → space (including original) · Temperature → background</p>
             <p id="overlay-status" role="status"></p>
             <div class="overlay-controls">
               <button type="button" class="button" id="overlay-generate">Generate Overlay</button>
               <button type="button" class="button secondary" id="overlay-regenerate" disabled>Regenerate</button>
               <label><input type="checkbox" id="overlay-mix" disabled> Original + Overlay</label>
-              <label>Overlay Gain <input type="range" id="overlay-gain" min="0" max="1" step="0.01" value="0.3"></label>
+              <label>Drums <input type="range" id="overlay-drums" min="0" max="1" step="0.01" value="0.3"></label>
+              <label>Drum timing <input type="range" id="overlay-drum-offset" min="-1" max="1" step="0.05" value="0.5" aria-describedby="overlay-drum-timing-help"><output id="overlay-drum-offset-value">+0.50 beat</output></label>
+              <label>Space <input type="range" id="overlay-space" min="0" max="1" step="0.01" value="0.3"></label>
+              <label>Background <input type="range" id="overlay-gain" min="0" max="1" step="0.01" value="0.3"></label>
             </div>
-            <p class="muted">Unchecked: Original only. Heartbeat listening has its own controls. Local preview only.</p>
+            <p class="muted" id="overlay-drum-timing-help">Drum timing: positive = later, negative = earlier. Starts half a beat later; adjust by ear to match the recording. No regeneration needed.</p>
+            <p class="muted">Unchecked: Original only. Overlay disables separate heartbeat listening. Local preview only.</p>
           </div>
         </section>
 

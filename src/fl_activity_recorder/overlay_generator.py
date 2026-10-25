@@ -1,4 +1,4 @@
-"""Bounded-memory physiological controls and reproducible ambient synthesis."""
+"""Bounded-memory physiological controls and reproducible audio stems."""
 
 from __future__ import annotations
 
@@ -9,13 +9,27 @@ from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.signal import lfilter  # type: ignore[import-untyped]
 
+from .audition_detection import DEFAULT_BPM
 from .live_signals import LiveSignalStore
 
 SAMPLE_RATE = 48000
-GENERATOR_VERSION = "ambient-v1"
-CONFIG = {"sample_rate": SAMPLE_RATE, "control_hz": 10, "peak": 0.16, "fade_seconds": 0.5}
+GENERATOR_VERSION = "physiology-v2"
+CONFIG = {
+    "sample_rate": SAMPLE_RATE,
+    "control_hz": 10,
+    "peak": 0.16,
+    "fade_seconds": 0.5,
+    "reverb_seconds": 1.2,
+    "max_wet": 0.35,
+    "rhythm": "soft-eighths-v1",
+    "default_bpm": DEFAULT_BPM,
+}
 FloatArray = NDArray[np.float64]
+Baseline = dict[str, tuple[float, float]]
+LIMITS = {"HR": (30, 220), "EA": (0, 100), "T1": (10, 50), "TH": (10, 50)}
+FLOORS = {"HR": 5.0, "EA": 0.05, "T1": 0.1, "TH": 0.1}
 
 
 def _series(
@@ -26,7 +40,7 @@ def _series(
     if not chunks:
         return np.empty((0, 2))
     data = np.concatenate(chunks)
-    low, high = (30, 220) if tag == "HR" else (0, 100)
+    low, high = LIMITS[tag]
     data = data[np.isfinite(data).all(axis=1) & (data[:, 1] >= low) & (data[:, 1] <= high)]
     if not len(data):
         return data
@@ -40,66 +54,95 @@ def _robust(values: FloatArray, floor: float) -> tuple[float, float]:
     return median, max(floor, float(np.median(np.abs(values - median))) * 1.4826)
 
 
+def session_baselines(signals: LiveSignalStore, session_id: str, end: float) -> Baseline:
+    """Reduce immutable raw chunks to one median per second for each channel."""
+    result: Baseline = {}
+    for tag, (low, high) in LIMITS.items():
+        medians: list[float] = []
+        current_second: int | None = None
+        pending: list[FloatArray] = []
+        # Only one second of raw values is retained across immutable chunk boundaries.
+        for chunk in signals.iter_raw(session_id, tag, 0, end):
+            chunk = chunk[
+                np.isfinite(chunk).all(axis=1) & (chunk[:, 1] >= low) & (chunk[:, 1] <= high)
+            ]
+            if not len(chunk):
+                continue
+            chunk = chunk[np.argsort(chunk[:, 0], kind="stable")]
+            bins = chunk[:, 0].astype(np.int64)
+            seconds, boundaries = np.unique(bins, return_index=True)
+            groups = np.split(chunk[:, 1], boundaries[1:])
+            for second, values in zip(seconds, groups, strict=True):
+                if current_second is not None and second != current_second:
+                    medians.append(float(np.median(np.concatenate(pending))))
+                    pending = []
+                current_second = int(second)
+                pending.append(values)
+        if pending:
+            medians.append(float(np.median(np.concatenate(pending))))
+        if medians:
+            result[tag] = _robust(np.asarray(medians), FLOORS[tag])
+    return result
+
+
 def controls(
-    signals: LiveSignalStore, session_id: str, start: float, end: float, session_end: float
+    signals: LiveSignalStore,
+    session_id: str,
+    start: float,
+    end: float,
+    session_end: float,
+    baselines: Baseline | None = None,
 ) -> tuple[FloatArray, dict[str, bool]]:
-    """Build smoothed 10 Hz controls without interpolating across long gaps."""
+    """Build 10 Hz HR/EDA/temperature controls without bridging long gaps."""
     grid = np.linspace(start, end, math.ceil((end - start) * 10) + 1)
-    result = np.full((len(grid), 2), 0.5)
-    valid = {}
-    for column, tag in enumerate(("HR", "EA")):
+    result = np.full((len(grid), 3), 0.5)
+    valid: dict[str, bool] = {}
+    baselines = (
+        session_baselines(signals, session_id, session_end) if baselines is None else baselines
+    )
+    for tag in LIMITS:
         data = _series(signals, session_id, tag, start, end)
-        coverage = float(np.sum(np.where(np.diff(data[:, 0]) <= 5,
-                                         np.diff(data[:, 0]), 0))) if len(data) else 0
+        gaps = np.diff(data[:, 0])
+        coverage = float(np.sum(gaps[gaps <= 5]))
         valid[tag] = len(data) >= 3 and coverage >= (end - start) * 0.5
-        if not valid[tag]:
+        if not valid[tag] or (tag == "TH" and valid.get("T1")):
             continue
-        if tag == "HR":
-            # One-second medians bound baseline memory independently of raw LSL rate.
-            baseline: list[float] = []
-            current_second: int | None = None
-            pending: list[float] = []
-            for chunk in signals.iter_raw(session_id, tag, 0, session_end):
-                for timestamp, value in chunk:
-                    if not math.isfinite(value) or not 30 <= value <= 220:
-                        continue
-                    second = int(timestamp)
-                    if current_second is not None and second != current_second:
-                        baseline.append(float(np.median(pending)))
-                        pending = []
-                    current_second = second
-                    pending.append(float(value))
-            if pending:
-                baseline.append(float(np.median(pending)))
-            center, scale = _robust(np.asarray(baseline or data[:, 1].tolist()), 5)
-        else:
-            center, scale = _robust(data[:, 1], 0.05)
+        column = {"HR": 0, "EA": 1, "T1": 2, "TH": 2}[tag]
+        center, scale = baselines.get(tag, _robust(data[:, 1], FLOORS[tag]))
         values = np.interp(grid, data[:, 0], data[:, 1])
-        supported = np.zeros(len(grid), dtype=bool)
-        for left, right in zip(data[:-1, 0], data[1:, 0], strict=True):
-            if right - left <= 5:
-                supported |= (grid >= left) & (grid <= right)
+        # Each grid point only needs its enclosing pair, rather than a full-grid scan per sample.
+        index = np.clip(np.searchsorted(data[:, 0], grid, side="right") - 1, 0, len(data) - 2)
+        supported = (
+            (grid >= data[index, 0])
+            & (grid <= data[index + 1, 0])
+            & (data[index + 1, 0] - data[index, 0] <= 5)
+        )
         normalized = 0.5 + 0.2 * np.tanh((values - center) / (2 * scale))
         if tag == "EA":
             normalized += 0.1 * np.tanh(np.gradient(values, grid) / scale)
         target = np.where(supported, normalized, 0.5)
-        for index in range(1, len(grid)):
-            result[index, column] = result[index - 1, column] + 0.05 * (
-                target[index] - result[index - 1, column]
-            )
+        result[:, column], _ = lfilter([0.05], [1, -0.95], target, zi=[0.475])
     if not any(valid.values()):
-        raise ValueError("No reliable HR or EDA data in this audition")
+        raise ValueError("No reliable HR, EDA or temperature data in this audition")
     return result, valid
+
+
+def _write(output: wave.Wave_write, audio: FloatArray, times: FloatArray, duration: float) -> None:
+    """Apply boundary fades and a strict per-stem peak ceiling."""
+    fade = np.clip(np.minimum(times, duration - times) / 0.5, 0, 1)
+    audio = np.clip(audio, -0.16, 0.16) * fade[:, None]
+    output.writeframesraw((audio * 32767).astype("<i2").tobytes())
 
 
 def generate_ambient(
     path: Path, duration: float, curves: FloatArray, seed: int, cancelled: threading.Event
 ) -> None:
-    """Stream deterministic filtered noise into a peak-bounded stereo PCM WAV."""
+    """Stream fixed noise bands mixed by temperature (or legacy HR) controls."""
     frames = round(duration * SAMPLE_RATE)
     rng = np.random.default_rng(seed)
-    memory = np.zeros((2, 2))
+    memory = [np.zeros((1, 2)) for _ in range(3)]
     control_times = np.linspace(0, duration, len(curves))
+    column = 2 if curves.shape[1] >= 3 else 0
     with wave.open(str(path), "wb") as output:
         output.setparams((2, 2, SAMPLE_RATE, frames, "NONE", "not compressed"))
         for first in range(0, frames, 4096):
@@ -107,17 +150,72 @@ def generate_ambient(
                 raise RuntimeError("Overlay generation cancelled")
             count = min(4096, frames - first)
             times = (np.arange(count) + first) / SAMPLE_RATE
-            hr = np.interp(times, control_times, curves[:, 0])
-            eda = np.interp(times, control_times, curves[:, 1])
+            temperature = np.interp(times, control_times, curves[:, column])
             noise = rng.uniform(-1, 1, (count, 2))
-            # Two continuous one-pole filters form a gentle, non-tonal noise band.
-            for index in range(count):
-                alpha = 0.015 + 0.055 * hr[index]
-                memory[0] += alpha * (noise[index] - memory[0])
-                memory[1] += 0.002 * (memory[0] - memory[1])
-                noise[index] = memory[0] - memory[1]
-            motion = 0.75 + 0.25 * np.sin(times * (0.3 + eda * 0.5))
-            fade = np.minimum(1, np.minimum(times, duration - times) / 0.5)
-            audio = np.tanh(noise * 2) * (0.10 + hr[:, None] * 0.06)
-            audio *= (motion * np.maximum(0, fade))[:, None]
-            output.writeframesraw((audio * 32767).astype("<i2").tobytes())
+            bands = []
+            for index, alpha in enumerate((0.02, 0.07, 0.002)):
+                filtered, memory[index] = lfilter(
+                    [alpha], [1, alpha - 1], noise, axis=0, zi=memory[index]
+                )
+                bands.append(filtered)
+            blend = temperature[:, None]
+            texture = bands[0] * (1 - blend) + bands[1] * blend - bands[2]
+            motion = 0.85 + 0.15 * np.sin(times * 0.45)
+            audio = np.tanh(texture * 2) * (0.10 + blend * 0.06) * motion[:, None]
+            _write(output, audio, times, duration)
+
+
+def drum_events(duration: float, curves: FloatArray, bpm: float) -> list[tuple[float, int, float]]:
+    """Place a restrained kick/tap pattern and HR-dependent eighth-note fills."""
+    events = []
+    times = np.linspace(0, duration, len(curves))
+    for eighth in range(math.ceil(duration * bpm / 30)):
+        at = eighth * 30 / bpm
+        hr = float(np.interp(at, times, curves[:, 0]))
+        if eighth % 2 and hr <= 0.55:
+            continue
+        instrument = (eighth // 2) % 2 if eighth % 2 == 0 else 2
+        events.append((at, instrument, 0.45 + 0.55 * hr))
+    return events
+
+
+def generate_drums(
+    path: Path,
+    duration: float,
+    curves: FloatArray,
+    bpm: float,
+    seed: int,
+    cancelled: threading.Event,
+) -> None:
+    """Mix small locally synthesized samples into a bounded-memory beat-grid stem."""
+    rng = np.random.default_rng(seed ^ 0xD2A5)
+    t = np.arange(round(0.25 * SAMPLE_RATE)) / SAMPLE_RATE
+    kick = np.sin(2 * np.pi * (52 * t + 2.8 * (1 - np.exp(-25 * t)))) * np.exp(-24 * t)
+    noise = rng.uniform(-1, 1, len(t))
+    tap = noise * np.exp(-65 * t)
+    shaker = np.concatenate(([0.0], np.diff(noise))) * np.exp(-95 * t) * 0.35
+    samples = [sample * (1 - np.exp(-t * 1200)) * 0.13 for sample in (kick, tap, shaker)]
+    events = [
+        (round(at * SAMPLE_RATE), instrument, velocity)
+        for at, instrument, velocity in drum_events(duration, curves, bpm)
+    ]
+    frames = round(duration * SAMPLE_RATE)
+    cursor = 0
+    with wave.open(str(path), "wb") as output:
+        output.setparams((2, 2, SAMPLE_RATE, frames, "NONE", "not compressed"))
+        for first in range(0, frames, 4096):
+            if cancelled.is_set():
+                raise RuntimeError("Overlay generation cancelled")
+            count = min(4096, frames - first)
+            mono = np.zeros(count)
+            while cursor < len(events) and events[cursor][0] + len(t) <= first:
+                cursor += 1
+            for position, instrument, velocity in events[cursor:]:
+                if position >= first + count:
+                    break
+                left, right = max(first, position), min(first + count, position + len(t))
+                mono[left - first : right - first] += (
+                    samples[instrument][left - position : right - position] * velocity
+                )
+            audio = np.column_stack((mono, mono))
+            _write(output, audio, (np.arange(count) + first) / SAMPLE_RATE, duration)

@@ -173,7 +173,10 @@ def _headline(
         # Spread differences are tiny in µS, so compare standard deviations as a ratio.
         ratio = math.sqrt(max(value, 0.0) / usual) if usual > 0 else float("inf")
         title = f"{name} {'more jumpy' if above else 'steadier'}"
-        text = f"{ratio:.1f}× usual movement" if math.isfinite(ratio) else "moving after a flat stretch"
+        text = (
+            f"{ratio:.1f}× usual movement"
+            if math.isfinite(ratio) else "moving after a flat stretch"
+        )
     change = value * length if feature == "slope" else value if feature == "delta" else 0.0
     if tag == CARDIO_TAG and abs(change) > HR_GLITCH_BPM:
         text += " · possible sensor glitch"
@@ -274,7 +277,10 @@ def _signal_summary(
     value = float(np.median(inside_window))
     spread = max((high - low) / 1.349, 1e-9)
     level = (value - usual) / spread
-    trend = "up2" if level >= 2 else "up" if level >= 1 else "down2" if level <= -2 else "down" if level <= -1 else "steady"
+    trend = (
+        "up2" if level >= 2 else "up" if level >= 1
+        else "down2" if level <= -2 else "down" if level <= -1 else "steady"
+    )
     return {
         "tag": tag,
         "value": value,
@@ -617,7 +623,8 @@ def _score_intervals(
                 sample_count=int(values.size),
                 fused_peak=float(np.max(values)),
                 modality_peaks=modality_peaks,
-                details={name: segment.detail for name, segment in strongest.items()},
+                details={name: segment.detail for name, segment in strongest.items()
+                         if segment.detail is not None},
             )
         )
     return candidates

@@ -937,6 +937,12 @@ function scheduleHeartbeats() {
   }
 }
 async function toggleHeartbeat(on = !heartbeat.enabled) {
+  if (on && $("overlay-mix").checked) {
+    $("overlay-mix").checked = false;
+    clearInterval(overlayPreview.timer);
+    overlayPreview.timer = null;
+    stopOverlaySource();
+  }
   heartbeat.enabled = on;
   $("listen-button").classList.toggle("active", on); $("listen-button").setAttribute("aria-pressed", String(on));
   clearInterval(heartbeat.timer); heartbeat.nextBeat = null; heartbeat.lastTime = null;
