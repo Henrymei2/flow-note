@@ -470,6 +470,30 @@ def test_temperature_preference_and_mapping(tmp_path: Path) -> None:
     assert first != path.read_bytes()
 
 
+def test_surf_spectrum_temperature_and_filter_continuity(tmp_path: Path) -> None:
+    """Distant surf suppresses hiss while warmer controls add a little brightness and level."""
+    measurements = []
+    for temperature in (0.2, 0.8):
+        path = tmp_path / f"surf-{temperature}.wav"
+        curves = np.full((101, 3), 0.5)
+        curves[:, 2] = temperature
+        generate_ambient(path, 10, curves, 42, threading.Event())
+        with wave.open(str(path)) as audio:
+            stereo = np.frombuffer(audio.readframes(audio.getnframes()), "<i2").reshape(-1, 2)
+        samples = stereo[48000:-48000, 0].astype(float) / 32768
+        power = np.abs(np.fft.rfft(samples)) ** 2
+        frequencies = np.fft.rfftfreq(len(samples), 1 / 48000)
+        assert power[frequencies > 3000].sum() / power.sum() < 0.005
+        assert power[(frequencies >= 100) & (frequencies <= 1400)].sum() / power.sum() > 0.9
+        measurements.append(
+            (np.sqrt(np.mean(samples**2)), np.sum(frequencies * power) / power.sum())
+        )
+        jumps = np.abs(np.diff(stereo.astype(float), axis=0))
+        assert np.mean(jumps[4095::4096]) < 3 * np.mean(jumps)
+    assert 1 < measurements[1][0] / measurements[0][0] < 1.4
+    assert measurements[1][1] > measurements[0][1] * 1.3
+
+
 def test_hr_drum_grid_and_stem_audio(tmp_path: Path) -> None:
     """HR affects density and velocity, preserving eighth-note grid and bounded PCM."""
     from fl_activity_recorder.overlay_generator import drum_events, generate_drums
@@ -533,6 +557,11 @@ def test_combined_stems_cache_restart_and_failure(
             manager.auditions(session_id)["auditions"][0]["overlay"]["overlay_id"]
             == record["overlay_id"]
         )
+        db.save_overlay({**record, "generator_version": "physiology-v2"})
+        stale = manager.auditions(session_id)["auditions"][0]
+        assert stale["overlay"] is None and stale["needs_regeneration"]
+        assert len(db.list_overlays(session_id)) == 1  # Listing never regenerates sound.
+        db.save_overlay(record)
         paths = [
             manager.audio_path(session_id, record["overlay_id"], stem) for stem in record["stems"]
         ]

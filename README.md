@@ -143,6 +143,12 @@ The local **Physiological Overlay** combines three mappings:
 
 Enable **Original + Overlay** to compare with the original. **Drums**, **Background**, and
 **Space** have separate controls, each initially 30%; changing them never regenerates audio.
+Audition intervals appear as teal ruler markers and trace washes beside Pattern suggestions.
+**Show auditions** only hides/shows these timeline markers; click a marker to select an interval. The selected Overlay
+settings sit below the timeline. Selecting a different interval stops the old preview.
+Space uses a damped 2.4-second stereo reverb on the original and stems. Background is
+a soft, locally synthesized wind/distant-surf texture instead of bright noise. Old sound
+caches prompt for explicit generation of the updated version.
 Playback, seeking, pausing, buffering, and playback speed follow the video. Overlay and the
 separate heartbeat listener are mutually exclusive. Original-only playback with heartbeat off
 retains unity gain; mixed playback has a shared output limiter.
@@ -152,8 +158,8 @@ at least one reliable HR, EA, T1 or TH channel, and no recorded BPM changes. His
 intervals without recorded BPM temporarily use **100 BPM**, labelled as a default in the UI.
 Recorded BPM takes priority. Contradictory tempo evidence and playback-event gaps disable generation
 with an explanation. The generated beat grid starts at the audition boundary. Preview initially delays drums by
-half a beat (300 ms at 100 BPM) to compensate for the observed early beat phase. Use
-**Drum timing** to adjust from one beat earlier to one beat later without regenerating;
+**180 ms** to compensate for the observed early beat phase. Use **Drum timing** to adjust from
+600 ms earlier to 600 ms later without regenerating;
 positive values mean later. The adjustment affects only drums and follows seeking and speed changes. No harmonic analysis or emotional inference is performed.
 Missing HR uses a fixed gentle rhythm; missing temperature uses a fixed background texture.
 Long physiological gaps return gently to neutral rather than being interpolated across.

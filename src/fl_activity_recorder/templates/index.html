@@ -89,32 +89,14 @@
         </div>
         <video id="session-video" controls preload="metadata" hidden></video>
         <p class="playhead-event" id="playhead-event" aria-live="polite" hidden></p>
-        <section class="audition-panel" aria-label="Audition overlays">
-          <h3>Auditions</h3>
-          <p id="audition-status" role="status">Choose a finished session to find auditions.</p>
-          <div id="audition-list" class="audition-list"></div>
-          <div id="overlay-panel" hidden>
-            <p><strong>Physiological Overlay</strong> · HR → drums · EDA → space (including original) · Temperature → background</p>
-            <p id="overlay-status" role="status"></p>
-            <div class="overlay-controls">
-              <button type="button" class="button" id="overlay-generate">Generate Overlay</button>
-              <button type="button" class="button secondary" id="overlay-regenerate" disabled>Regenerate</button>
-              <label><input type="checkbox" id="overlay-mix" disabled> Original + Overlay</label>
-              <label>Drums <input type="range" id="overlay-drums" min="0" max="1" step="0.01" value="0.3"></label>
-              <label>Drum timing <input type="range" id="overlay-drum-offset" min="-1" max="1" step="0.05" value="0.5" aria-describedby="overlay-drum-timing-help"><output id="overlay-drum-offset-value">+0.50 beat</output></label>
-              <label>Space <input type="range" id="overlay-space" min="0" max="1" step="0.01" value="0.3"></label>
-              <label>Background <input type="range" id="overlay-gain" min="0" max="1" step="0.01" value="0.3"></label>
-            </div>
-            <p class="muted" id="overlay-drum-timing-help">Drum timing: positive = later, negative = earlier. Starts half a beat later; adjust by ear to match the recording. No regeneration needed.</p>
-            <p class="muted">Unchecked: Original only. Overlay disables separate heartbeat listening. Local preview only.</p>
-          </div>
-        </section>
-
         <div class="track-toolbar">
           <div id="track-picker" class="track-picker"></div>
           <div class="toolbar-controls">
             <button type="button" class="toggle-button active" id="pattern-toggle-button" hidden aria-pressed="true" title="Show or hide pattern-suggestion overlay">
               <span class="toggle-dot" aria-hidden="true"></span>Show suggestions
+            </button>
+            <button type="button" class="toggle-button active" id="audition-toggle-button" hidden aria-pressed="true" title="Show or hide audition intervals">
+              <span class="toggle-dot" aria-hidden="true"></span>Show auditions
             </button>
             <div class="listen-control" id="listen-control" hidden>
               <button type="button" class="toggle-button" id="listen-button" aria-pressed="false" title="Play your recorded heartbeat along with the video">
@@ -132,6 +114,7 @@
         </div>
 
         <div class="timeline-stack" id="timeline-stack">
+          <div class="audition-overlay" id="audition-overlay" aria-hidden="true"></div>
           <div class="pattern-overlay" id="pattern-overlay" aria-hidden="true"></div>
           <div class="timeline-grid" id="timeline-grid" aria-hidden="true"></div>
           <div class="timeline-row timeline-ruler-row">
@@ -139,6 +122,7 @@
             <div class="lane-content">
               <div id="timeline-ruler" class="timeline-ruler"></div>
               <div id="pattern-strip" class="pattern-strip" aria-label="Bio signal pattern markers"></div>
+              <div id="audition-strip" class="audition-strip" aria-label="Audition intervals" hidden></div>
             </div>
           </div>
           <div class="timeline-row" id="event-lane">
@@ -163,6 +147,36 @@
           <div id="cluster-legend" class="cluster-legend" aria-label="Pattern suggestion legend"></div>
           <div class="pattern-key" title="Brighter = bigger change in your body signals">Mild<i class="mild"></i><i class="clear"></i><i class="strong"></i>Strong</div>
         </div>
+
+        <section class="audition-panel" aria-label="Audition overlays">
+          <div class="audition-heading"><h3>Auditions</h3><p id="audition-status" role="status">Choose a finished session to find auditions.</p></div>
+          <div id="overlay-panel" hidden>
+            <header class="overlay-heading"><strong>Physiological Overlay</strong><span id="overlay-heading"></span></header>
+            <div class="overlay-actions">
+              <button type="button" class="button" id="overlay-generate">Generate Overlay</button>
+              <button type="button" class="button secondary" id="overlay-regenerate" disabled>Regenerate</button>
+              <label class="toggle-button"><input type="checkbox" id="overlay-mix" disabled> Original + Overlay</label>
+            </div>
+            <p id="overlay-status" role="status"></p>
+            <div class="overlay-controls">
+              <fieldset><legend>Drums <small>HR</small></legend>
+                <label>Volume <input type="range" id="overlay-drums" min="0" max="1" step="0.01" value="0.3"></label>
+                <label>Timing <input type="range" id="overlay-drum-offset" min="-600" max="600" step="10" value="180" aria-describedby="overlay-drum-timing-help"></label>
+                <output id="overlay-drum-offset-value">+180 ms</output>
+                <small id="overlay-drum-timing-help">Positive = later · Negative = earlier</small>
+              </fieldset>
+              <fieldset><legend>Space <small>EDA</small></legend>
+                <label>Strength <input type="range" id="overlay-space" min="0" max="1" step="0.01" value="0.3" disabled></label>
+                <small id="overlay-space-status">EDA → original + overlay</small>
+              </fieldset>
+              <fieldset><legend>Background <small>Temperature</small></legend>
+                <label>Volume <input type="range" id="overlay-gain" min="0" max="1" step="0.01" value="0.3"></label>
+                <small>Soft wind &amp; distant surf</small>
+              </fieldset>
+            </div>
+            <p class="muted overlay-help">Unchecked: original only. Controls update live without regeneration. Overlay disables separate heartbeat listening.</p>
+          </div>
+        </section>
 
         <section class="moment-card" id="moment-card" aria-label="Why this moment was suggested" hidden>
           <header>

@@ -330,6 +330,10 @@ class OverlayManager:
                     ),
                     None,
                 )
+                item["needs_regeneration"] = item["overlay"] is None and any(
+                    r["audition_id"] == item["id"] and r["status"] == "ready"
+                    for r in records
+                )
             except (ValueError, OSError, KeyError) as exc:
                 item.update(eligible=False, reason=str(exc))
         return {

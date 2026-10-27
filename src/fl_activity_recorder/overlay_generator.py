@@ -9,20 +9,21 @@ from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.signal import lfilter  # type: ignore[import-untyped]
+from scipy.signal import butter, lfilter, sosfilt  # type: ignore[import-untyped]
 
 from .audition_detection import DEFAULT_BPM
 from .live_signals import LiveSignalStore
 
 SAMPLE_RATE = 48000
-GENERATOR_VERSION = "physiology-v2"
+GENERATOR_VERSION = "physiology-v3"
 CONFIG = {
     "sample_rate": SAMPLE_RATE,
     "control_hz": 10,
     "peak": 0.16,
     "fade_seconds": 0.5,
-    "reverb_seconds": 1.2,
-    "max_wet": 0.35,
+    "reverb_seconds": 2.4,
+    "max_wet": 0.6,
+    "ambience": "distant-surf-v1",
     "rhythm": "soft-eighths-v1",
     "default_bpm": DEFAULT_BPM,
 }
@@ -137,10 +138,17 @@ def _write(output: wave.Wave_write, audio: FloatArray, times: FloatArray, durati
 def generate_ambient(
     path: Path, duration: float, curves: FloatArray, seed: int, cancelled: threading.Event
 ) -> None:
-    """Stream fixed noise bands mixed by temperature (or legacy HR) controls."""
+    """Stream dark, slowly swelling wind/surf with temperature-controlled warmth."""
     frames = round(duration * SAMPLE_RATE)
     rng = np.random.default_rng(seed)
-    memory = [np.zeros((1, 2)) for _ in range(3)]
+    filters = [
+        butter(3, [100, cutoff], btype="bandpass", fs=SAMPLE_RATE, output="sos")
+        for cutoff in (550, 1400)
+    ]
+    memory = [np.zeros((len(sos), 2, 2)) for sos in filters]
+    # Independent seeded phases create a slow, non-beat-synchronous swell.
+    phases = rng.uniform(0, 2 * np.pi, (3, 2))
+    rates = rng.uniform([0.055, 0.095, 0.17], [0.085, 0.14, 0.22])
     control_times = np.linspace(0, duration, len(curves))
     column = 2 if curves.shape[1] >= 3 else 0
     with wave.open(str(path), "wb") as output:
@@ -153,15 +161,18 @@ def generate_ambient(
             temperature = np.interp(times, control_times, curves[:, column])
             noise = rng.uniform(-1, 1, (count, 2))
             bands = []
-            for index, alpha in enumerate((0.02, 0.07, 0.002)):
-                filtered, memory[index] = lfilter(
-                    [alpha], [1, alpha - 1], noise, axis=0, zi=memory[index]
-                )
-                bands.append(filtered)
+            for index, sos in enumerate(filters):
+                filtered, memory[index] = sosfilt(sos, noise, axis=0, zi=memory[index])
+                # Match broadband levels before temperature blends the fixed bands.
+                bands.append(filtered * (7.0 if index == 0 else 4.2))
             blend = temperature[:, None]
-            texture = bands[0] * (1 - blend) + bands[1] * blend - bands[2]
-            motion = 0.85 + 0.15 * np.sin(times * 0.45)
-            audio = np.tanh(texture * 2) * (0.10 + blend * 0.06) * motion[:, None]
+            texture = bands[0] * (1 - blend * 0.65) + bands[1] * blend * 0.65
+            motion = 0.75 + sum(
+                weight * np.sin(2 * np.pi * rate * times[:, None] + phase)
+                for weight, rate, phase in zip((0.13, 0.08, 0.04), rates, phases, strict=True)
+            )
+            audio = texture * (0.075 + blend * 0.045) * motion
+            audio = 0.16 * np.tanh(audio / 0.16)
             _write(output, audio, times, duration)
 
 

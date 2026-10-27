@@ -248,6 +248,7 @@ function drawSignals() {
   }
   enableIntervalDrag(ruler);
   drawTimelineRuler(span); drawPatternStrip(span); drawPatternOverlay(span);
+  if (typeof drawAuditions === "function") drawAuditions();
   updateTimelinePlayhead(); updatePlayheadEvent(); updateTimelineSelection();
 }
 
@@ -516,7 +517,7 @@ function enableSelectionResize() {
         const time = pointerTime(moveEvent, $("timeline-ruler")); const interval = state.selectedInterval;
         let { start, end } = interval;
         if (edge === "start") start = Math.max(0, Math.min(time, end - 0.05)); else end = Math.max(time, start + 0.05);
-        state.selectedInterval = { ...interval, start, end }; updateTimelineSelection();
+        state.selectedInterval = { ...interval, start, end }; reconcileAuditionSelection(state.selectedInterval); updateTimelineSelection();
         $("annotation-start").value = start.toFixed(3); $("annotation-end").value = end.toFixed(3); updateDurationDisplay();
       };
       const onUp = () => { handle.removeEventListener("pointermove", onMove); selectInterval(state.selectedInterval); };
@@ -544,10 +545,11 @@ $("timeline-stack").addEventListener("wheel", (event) => {
 function selectInterval(interval, bookmark = null) {
   const duration = sessionDuration(state.detail); const start = Math.max(0, Math.min(duration, Number(interval.start))); const end = Math.max(start, Math.min(duration, Number(interval.end)));
   if (end - start < 0.001) return; state.selectedInterval = { ...interval, start, end }; state.selectedBookmark = bookmark;
+  reconcileAuditionSelection(state.selectedInterval);
   const padding = Math.max(interval.sourceType === "pattern" ? 30 : 1, (end - start) * 0.2); state.focusWindow = { start: Math.max(0, start - padding), end: Math.min(duration, end + padding) }; seekTimeline(start); renderComposer(bookmark); renderMomentCard(); loadTimeline(); renderBookmarks();
 }
 
-function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; $("annotation-composer").hidden = true; renderMomentCard(); renderBookmarks(); loadTimeline(); }
+function clearIntervalSelection() { state.selectedInterval = null; state.selectedBookmark = null; state.focusWindow = null; reconcileAuditionSelection(null); $("annotation-composer").hidden = true; renderMomentCard(); renderBookmarks(); loadTimeline(); }
 
 function updateDurationDisplay() {
   const start = Number($("annotation-start").value), end = Number($("annotation-end").value);
@@ -584,7 +586,7 @@ function renderComposer(bookmark = null) {
   $("annotation-note").value = bookmark?.note || ""; $("annotation-labels").value = bookmark?.labels.join(", ") || "";
   renderLabelSuggestions();
   $("annotation-save").textContent = bookmark ? "Save changes" : "Save to History"; $("annotation-delete").hidden = !bookmark;
-  if (wasHidden) {
+  if (wasHidden && !state.selectedInterval?.auditionId) {
     $("annotation-composer").scrollIntoView({ behavior: "smooth", block: "nearest" });
     $("annotation-note").focus();
   }

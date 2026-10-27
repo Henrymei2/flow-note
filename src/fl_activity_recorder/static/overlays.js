@@ -5,6 +5,46 @@ const overlayPreview = {
   anchor: null, gain: null, drumGain: null, reverb: null, timer: null, poll: null,
   controller: new AbortController(), waiting: false, loading: false,
 };
+const auditionTimeline = { items: [], visible: true };
+
+/** Draw audition intervals on the ruler and traces. */
+function drawAuditions() {
+  const strip = $("audition-strip"), wash = $("audition-overlay");
+  strip.replaceChildren(); wash.replaceChildren();
+  $("audition-toggle-button").hidden = auditionTimeline.items.length === 0;
+  strip.hidden = !auditionTimeline.visible || !auditionTimeline.items.length;
+  if (!auditionTimeline.visible) return;
+  const timeline = state.timeline;
+  const span = timeline ? timeline.end - timeline.start : 0;
+  const box = span > 0 ? timelineContentBox() : null;
+  for (const [index, audition] of auditionTimeline.items.entries()) {
+    const selected = overlayPreview.audition?.id === audition.id;
+    const title = `Audition ${index + 1} · ${formatTime(audition.start_time)}–${formatTime(audition.end_time)} · ${audition.duration.toFixed(1)}s${audition.reason ? " · " + audition.reason : ""}`;
+    if (!box) continue;
+    const start = Math.max(audition.start_time, timeline.start), end = Math.min(audition.end_time, timeline.end);
+    if (end <= start) continue;
+    const marker = document.createElement("button"); marker.type = "button";
+    marker.className = `audition-segment${selected ? " selected" : ""}${audition.eligible ? "" : " unavailable"}`;
+    marker.title = title; marker.setAttribute("aria-label", title); marker.setAttribute("aria-pressed", String(selected));
+    marker.style.left = `${(start - timeline.start) / span * 100}%`;
+    marker.style.width = `${(end - start) / span * 100}%`;
+    marker.onclick = (event) => { event.stopPropagation(); selectAudition(audition); }; strip.append(marker);
+    const band = document.createElement("div"); band.className = `audition-band${selected ? " selected" : ""}`;
+    band.style.left = `${box.left + (start - timeline.start) / span * box.width}px`;
+    band.style.width = `${(end - start) / span * box.width}px`; wash.append(band);
+  }
+}
+
+/** Detach playback when the selected timeline interval no longer identifies this audition. */
+function reconcileAuditionSelection(interval) {
+  const audition = overlayPreview.audition;
+  if (!audition || (interval?.auditionId === audition.id
+      && interval.start === audition.start_time && interval.end === audition.end_time)) return;
+  const items = auditionTimeline.items;
+  resetOverlayPreview(overlayPreview.sessionId);
+  auditionTimeline.items = items;
+  drawAuditions();
+}
 /** Own the shared output graph; the original track bypasses limiting when additions are off. */
 const reviewAudio = { context: null, bus: null, limiter: null, video: null, limited: null, impulse: null };
 
@@ -56,7 +96,7 @@ function clearOverlaySpace() {
   overlayPreview.reverb = null;
 }
 
-/** Make a deterministic short stereo room; original audio keeps its dry path. */
+/** Make a damped stereo room with explicit unit-energy impulses and early reflections. */
 function createOverlaySpace() {
   const ctx = reviewAudio.context;
   const spatial = overlayPreview.record?.spatial;
@@ -65,21 +105,39 @@ function createOverlaySpace() {
   const send = ctx.createGain();
   const convolver = ctx.createConvolver();
   const output = ctx.createGain();
-  const seconds = spatial.reverb_seconds || 1.2;
+  const seconds = spatial.reverb_seconds || 2.4;
+  const impulseKey = `${ctx.sampleRate}:${seconds}:room-v3`;
   let impulse = reviewAudio.impulse;
-  if (!impulse) {
+  if (!impulse || reviewAudio.impulseKey !== impulseKey) {
     impulse = ctx.createBuffer(2, Math.round(ctx.sampleRate * seconds), ctx.sampleRate);
     let seed = 0x13579bdf;
     for (let channel = 0; channel < 2; channel++) {
       const samples = impulse.getChannelData(channel);
+      let low = 0, bass = 0, energy = 0;
+      const lowAlpha = 1 - Math.exp(-2 * Math.PI * 4000 / ctx.sampleRate);
+      const bassAlpha = 1 - Math.exp(-2 * Math.PI * 150 / ctx.sampleRate);
       for (let i = 0; i < samples.length; i++) {
         seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
         const t = i / ctx.sampleRate;
-        samples[i] = t < 0.015 ? 0 : (seed / 2147483648 - 1) * Math.exp(-6 * t / seconds);
+        low += lowAlpha * (seed / 2147483648 - 1 - low);
+        bass += bassAlpha * (low - bass);
+        samples[i] = t < 0.025 ? 0 : (low - bass) * Math.exp(-4.5 * (t - 0.025) / seconds);
+        energy += samples[i] * samples[i];
       }
+      const diffuseScale = 1 / Math.sqrt(energy || 1);
+      for (let i = 0; i < samples.length; i++) samples[i] *= diffuseScale;
+      for (const [delay, gain] of [[0.04, .35], [0.065, .24], [0.095, .16]]) {
+        const index = Math.round((delay + channel * .003) * ctx.sampleRate);
+        if (index < samples.length) samples[index] += gain;
+      }
+      energy = samples.reduce((sum, sample) => sum + sample * sample, 0);
+      const scale = 1 / Math.sqrt(energy || 1);
+      for (let i = 0; i < samples.length; i++) samples[i] *= scale;
     }
     reviewAudio.impulse = impulse;
+    reviewAudio.impulseKey = impulseKey;
   }
+  convolver.normalize = false;
   convolver.buffer = impulse;
   send.gain.value = 0;
   input.connect(send).connect(convolver).connect(output).connect(reviewAudio.limiter);
@@ -100,7 +158,8 @@ function updateOverlaySpace(offset) {
   const left = Math.floor(position);
   const value = spatial.values[left] + (spatial.values[Math.min(left + 1, spatial.values.length - 1)]
     - spatial.values[left]) * (position - left);
-  const wet = Math.min(0.35, spatial.max_wet ?? 0.35) * value * Number($("overlay-space").value);
+  const wet = Math.min(0.6, spatial.max_wet ?? 0.6) * Number($("overlay-space").value)
+    * (0.4 + 0.6 * Math.max(0, Math.min(1, value)));
   overlayPreview.reverb.send.gain.setTargetAtTime(wet, reviewAudio.context.currentTime, 0.04);
 }
 
@@ -140,7 +199,11 @@ function resetOverlayPreview(sessionId = null) {
     timer: null, poll: null, loading: false, waiting: false });
   $("overlay-mix").checked = false;
   $("overlay-panel").hidden = true;
-  $("audition-list").replaceChildren();
+  auditionTimeline.items = [];
+  $("audition-strip").replaceChildren();
+  $("audition-overlay").replaceChildren();
+  $("audition-strip").hidden = true;
+  $("audition-toggle-button").hidden = true;
   updateReviewOutput();
 }
 
@@ -164,17 +227,10 @@ async function loadAuditions(session) {
     const result = await overlayRequest(`/api/sessions/${session.id}/auditions`);
     if (epoch !== overlayPreview.epoch) return;
     $("audition-status").textContent = result.auditions.length
-      ? "Choose one continuous playback interval (8 seconds–5 minutes)."
+      ? "Click an audition interval on the timeline (8 seconds–5 minutes)."
       : "No auditions of at least 8 seconds found.";
-    for (const [index, audition] of result.auditions.entries()) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.setAttribute("aria-pressed", "false");
-      button.textContent = `${index + 1} · ${formatTime(audition.start_time)}–${formatTime(audition.end_time)} · ${audition.duration.toFixed(1)}s${audition.complete ? "" : " · Incomplete"}`;
-      button.title = audition.reason || "Select audition";
-      button.onclick = () => selectAudition(audition, button);
-      $("audition-list").append(button);
-    }
+    auditionTimeline.items = result.auditions;
+    drawAuditions();
     if (result.diagnostics.length) {
       $("audition-status").textContent += ` ${result.diagnostics.join("; ")}`;
     }
@@ -186,7 +242,7 @@ async function loadAuditions(session) {
 }
 
 /** Select the audition in the timeline/bookmark composer and load its cached preview. */
-async function selectAudition(audition, button) {
+async function selectAudition(audition) {
   overlayPreview.epoch++;
   overlayPreview.controller.abort();
   overlayPreview.controller = new AbortController();
@@ -199,7 +255,7 @@ async function selectAudition(audition, button) {
   overlayPreview.waiting = false;
   overlayPreview.loading = false;
   overlayPreview.record = audition.overlay;
-  $("overlay-drum-offset").value = String(audition.drumOffsetBeats ?? 0.5);
+  $("overlay-drum-offset").value = String(audition.drumOffsetMs ?? 180);
   updateDrumTimingLabel();
   $("overlay-mix").checked = false;
   updateReviewOutput();
@@ -208,14 +264,16 @@ async function selectAudition(audition, button) {
     start: audition.start_time,
     end: audition.end_time,
     sourceType: "manual",
+    auditionId: audition.id,
     label: "Audition segment",
     patternContext: null,
   });
-  for (const item of $("audition-list").children) item.setAttribute("aria-pressed", String(item === button));
+  drawAuditions();
   $("overlay-panel").hidden = false;
+  $("overlay-heading").textContent = `${formatTime(audition.start_time)}–${formatTime(audition.end_time)} · ${audition.bpm || 100} BPM${audition.bpm_source === "default" ? " (default)" : ""}`;
   const tempoNote = audition.bpm_source === "default"
     ? ` Using default ${audition.bpm} BPM (no recorded tempo).` : "";
-  renderOverlayControls(audition.reason || `Ready to generate physiological overlay.${tempoNote}`);
+  renderOverlayControls(audition.reason || `${audition.needs_regeneration ? "Updated sound available. Generate the new overlay." : "Ready to generate physiological overlay."}${tempoNote}`);
   if (audition.overlay) await loadOverlayBuffer(audition.overlay, overlayPreview.epoch);
 }
 
@@ -227,6 +285,11 @@ function renderOverlayControls(message) {
   $("overlay-generate").disabled = !overlayPreview.audition?.eligible || busy;
   $("overlay-regenerate").disabled = !overlayPreview.audition?.eligible || busy || !ready;
   $("overlay-mix").disabled = !ready;
+  const values = overlayPreview.record?.spatial?.values || [];
+  $("overlay-space").disabled = !ready || !values.length;
+  $("overlay-space-status").textContent = !ready ? "EDA → original + overlay"
+    : !values.length ? "EDA unavailable · space off"
+    : Math.max(...values) - Math.min(...values) < 0.02 ? "EDA steady · consistent space" : "EDA → original + overlay";
 }
 
 /** Generate explicitly and poll only while the original selection remains active. */
@@ -311,17 +374,17 @@ async function loadOverlayBuffer(record, epoch) {
   }
 }
 
-/** Positive beat offset delays drums; preserve background and EDA's session clock. */
+/** Positive millisecond offset delays drums; preserve background and EDA's session clock. */
 function drumDelaySeconds() {
-  const bpm = Number(overlayPreview.record?.bpm || overlayPreview.audition?.bpm || 100);
-  return Number($("overlay-drum-offset").value) * 60 / bpm;
+  return Number($("overlay-drum-offset").value) / 1000;
 }
 
-/** Show the direction and BPM-derived delay without requiring another render. */
+/** Show the phase in milliseconds and beats without requiring another render. */
 function updateDrumTimingLabel() {
-  const beats = Number($("overlay-drum-offset").value);
-  const milliseconds = Math.round(drumDelaySeconds() * 1000);
-  $("overlay-drum-offset-value").textContent = `${beats >= 0 ? "+" : ""}${beats.toFixed(2)} beat · ${milliseconds >= 0 ? "+" : ""}${milliseconds} ms`;
+  const milliseconds = Number($("overlay-drum-offset").value);
+  const bpm = Number(overlayPreview.record?.bpm || overlayPreview.audition?.bpm || 100);
+  const beats = milliseconds * bpm / 60000;
+  $("overlay-drum-offset-value").textContent = `${milliseconds >= 0 ? "+" : ""}${milliseconds} ms · ${beats >= 0 ? "+" : ""}${beats.toFixed(2)} beat`;
 }
 
 /** Schedule an individual stem at its phase-correct offset, clipping at the audition end. */
@@ -354,7 +417,7 @@ function startOverlayStem(stem, buffer, offset, rate, clock) {
 function retimeOverlayDrums() {
   updateDrumTimingLabel();
   if (overlayPreview.audition) {
-    overlayPreview.audition.drumOffsetBeats = Number($("overlay-drum-offset").value);
+    overlayPreview.audition.drumOffsetMs = Number($("overlay-drum-offset").value);
   }
   if (!overlayPreview.active || !overlayPreview.buffers?.drums) return;
   const video = $("session-video");
@@ -450,6 +513,12 @@ $("overlay-mix").onchange = async () => {
   } catch (error) { if (epoch === overlayPreview.epoch) failOverlayPlayback(error.message); }
 };
 $("overlay-drum-offset").oninput = retimeOverlayDrums;
+$("audition-toggle-button").onclick = () => {
+  auditionTimeline.visible = !auditionTimeline.visible;
+  $("audition-toggle-button").classList.toggle("active", auditionTimeline.visible);
+  $("audition-toggle-button").setAttribute("aria-pressed", String(auditionTimeline.visible));
+  drawAuditions();
+};
 $("overlay-drums").oninput = () => {
   if (overlayPreview.drumGain) overlayPreview.drumGain.gain.setTargetAtTime(
     Number($("overlay-drums").value), reviewAudio.context.currentTime, 0.02);

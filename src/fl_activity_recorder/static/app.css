@@ -196,11 +196,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
    stack as a translucent color overlay sitting behind every trace (negative
    z-index), plus a slim clickable marker strip on the ruler for quick recall. */
 .timeline-stack { position: relative; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; background: var(--panel); box-shadow: var(--sheen); isolation: isolate; --lane-label-width: 128px; }
-.pattern-overlay { position: absolute; top: 23px; bottom: 0; left: 0; right: 0; z-index: -1; pointer-events: none; }
+.pattern-overlay { position: absolute; top: var(--timeline-ruler-height, 23px); bottom: 0; left: 0; right: 0; z-index: -1; pointer-events: none; }
 /* A faint wash with crisp edges (shade set per suggestion in app.js): the
    stretch reads at a glance while the signal traces keep their own colors. */
 .pattern-band { position: absolute; top: 0; bottom: 0; border-inline: 1px solid transparent; }
-.timeline-grid { position: absolute; top: 23px; bottom: 0; left: 0; right: 0; z-index: 0; pointer-events: none; }
+.timeline-grid { position: absolute; top: var(--timeline-ruler-height, 23px); bottom: 0; left: 0; right: 0; z-index: 0; pointer-events: none; }
 .grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.035); }
 .timeline-row { display: grid; grid-template-columns: var(--lane-label-width) minmax(0,1fr); align-items: stretch; border-bottom: 1px solid var(--line); }
 .timeline-row:last-child { border-bottom: 0; }
@@ -217,15 +217,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .ruler-tick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--line); }
 .ruler-tick span { position: absolute; top: 1px; left: 5px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pattern-strip { position: relative; height: 6px; margin-top: 3px; border-radius: 3px; overflow: hidden; background: var(--panel-2); }
-.timeline-playhead { position: absolute; top: 23px; bottom: 0; width: 1px; background: var(--red); pointer-events: none; z-index: 4; }
+.timeline-playhead { position: absolute; top: var(--timeline-ruler-height, 23px); bottom: 0; width: 1px; background: var(--red); pointer-events: none; z-index: 4; }
 .timeline-playhead::before { content: ""; position: absolute; top: -5px; left: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--red); }
-.timeline-selection { position: absolute; top: 23px; bottom: 0; background: rgba(105,168,255,.2); border-inline: 1px solid var(--blue); pointer-events: none; z-index: 3; }
+.timeline-selection { position: absolute; top: var(--timeline-ruler-height, 23px); bottom: 0; background: rgba(105,168,255,.2); border-inline: 1px solid var(--blue); pointer-events: none; z-index: 3; }
 .selection-handle { position: absolute; top: 0; bottom: 0; width: 14px; cursor: ew-resize; pointer-events: auto; }
 .selection-handle-start { left: -7px; }
 .selection-handle-end { right: -7px; }
 .selection-handle::after { content: ""; position: absolute; top: 8px; bottom: 8px; left: 50%; width: 3px; border-radius: 2px; background: var(--blue); transform: translateX(-50%); opacity: .85; }
 .selection-handle:hover::after { opacity: 1; background: var(--text); }
-.timeline-drag-preview { position: absolute; top: 23px; bottom: 0; background: var(--accent-soft); border-inline: 1px dashed var(--accent); pointer-events: none; z-index: 3; display: flex; justify-content: center; }
+.timeline-drag-preview { position: absolute; top: var(--timeline-ruler-height, 23px); bottom: 0; background: var(--accent-soft); border-inline: 1px dashed var(--accent); pointer-events: none; z-index: 3; display: flex; justify-content: center; }
 .drag-duration { margin-top: 4px; height: fit-content; padding: 2px 7px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .event-ruler { position: relative; height: 22px; width: 100%; cursor: crosshair; }
 .event-marker { position: absolute; top: 5px; width: 3px; height: 12px; padding: 0; transform: translateX(-50%); border: 0; border-radius: 2px; background: var(--muted); cursor: pointer; }
@@ -331,12 +331,35 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   .zoom-control #zoom { width: 70px; }
   .timeline-stack { --lane-label-width: 88px; }
 }
-:root { --overlay-accent: #709d93; }
-.audition-panel { margin: 1rem 0; padding: 1rem; border: 1px solid var(--overlay-accent); border-radius: 10px; }
-.audition-list, .overlay-controls { display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; }
-.audition-list button { padding: 0.6rem; text-align: left; border-radius: 6px; cursor: pointer; }
-.audition-list button[aria-pressed="true"] { outline: 2px solid var(--overlay-accent); }
-.overlay-controls label { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
-.overlay-controls input[type="range"] { width: 8rem; }
-#overlay-panel { margin-top: 0.8rem; }
-#overlay-status { white-space: pre-line; }
+:root { --overlay-accent: #5fc4b8; }
+.timeline-stack:has(#audition-strip:not([hidden])) { --timeline-ruler-height: 32px; }
+.audition-overlay { position: absolute; inset: var(--timeline-ruler-height, 23px) 0 0; z-index: -1; pointer-events: none; }
+.audition-band { position: absolute; inset-block: 0; background: rgba(95,196,184,.065); border-inline: 1px solid rgba(95,196,184,.3); }
+.audition-band.selected { background: rgba(95,196,184,.13); border-color: var(--overlay-accent); }
+.audition-strip { position: relative; height: 6px; margin-top: 3px; overflow: hidden; border-radius: 3px; }
+.audition-segment { position: absolute; top: 0; height: 100%; padding: 0; border: 0; background: var(--overlay-accent); opacity: .55; cursor: pointer; }
+.audition-segment.selected, .audition-segment:hover, .audition-segment:focus-visible { opacity: 1; }
+.audition-segment.unavailable { background: repeating-linear-gradient(120deg, var(--overlay-accent) 0 3px, transparent 3px 6px); }
+#audition-toggle-button.active { color: var(--overlay-accent); border-color: var(--overlay-accent); }
+#audition-toggle-button.active .toggle-dot { background: var(--overlay-accent); }
+.audition-panel { margin: 1rem 0; }
+.audition-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem 1rem; }
+.audition-heading h3 { margin: 0; font-size: .9rem; }
+.audition-heading p { color: var(--muted); font-size: .8rem; margin: .4rem 0; }
+.overlay-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.overlay-actions label { white-space: nowrap; }
+.overlay-actions input[type="checkbox"] { width: auto; margin: 0; flex: 0 0 auto; }
+#overlay-panel { margin-top: .8rem; padding: 1rem; border: 1px solid rgba(95,196,184,.35); border-radius: 10px; background: var(--panel-2); }
+.overlay-heading { display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: baseline; margin-bottom: .8rem; }
+.overlay-heading span { color: var(--muted); font-size: .8rem; }
+.overlay-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px,100%),1fr)); gap: .75rem; }
+.overlay-controls fieldset { min-width: 0; margin: 0; padding: .65rem .8rem; border: 1px solid var(--line); border-radius: 8px; }
+.overlay-controls legend { font-size: .85rem; padding: 0 .3rem; }
+.overlay-controls legend small { margin-left: .5rem; }
+.overlay-controls label { display: flex; justify-content: space-between; align-items: center; gap: .6rem; font-size: .8rem; margin-bottom: .5rem; }
+.overlay-controls input[type="range"] { width: 55%; min-width: 0; }
+.overlay-controls small, .overlay-controls output { display: block; color: var(--muted); font-size: .7rem; }
+.overlay-controls output { margin-bottom: .35rem; }
+.overlay-controls legend small { display: inline; }
+.overlay-help { font-size: .75rem; margin-bottom: 0; }
+#overlay-status { white-space: pre-line; font-size: .8rem; }
