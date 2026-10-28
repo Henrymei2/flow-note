@@ -542,6 +542,10 @@ def test_combined_stems_cache_restart_and_failure(
             response = manager.request(session_id, item["id"], False, "physiological")
             record = wait_ready(manager, session_id, response["overlay_id"])
             assert record["status"] == "ready", record
+            assert record["generator_version"] == "physiology-v4"
+            assert record["normalization"] == item["normalization"]
+            assert record["normalization"]["scope"] == "audition"
+            assert record["normalization"]["channels"]["HR"]["selected"]
             assert record["stems"] == ["ambient", "drums"] and record["bpm"] == 120
             assert record["spatial"]["values"] == []  # HR-only input has no wet effect.
             assert (
@@ -557,7 +561,7 @@ def test_combined_stems_cache_restart_and_failure(
             manager.auditions(session_id)["auditions"][0]["overlay"]["overlay_id"]
             == record["overlay_id"]
         )
-        db.save_overlay({**record, "generator_version": "physiology-v2"})
+        db.save_overlay({**record, "generator_version": "physiology-v3"})
         stale = manager.auditions(session_id)["auditions"][0]
         assert stale["overlay"] is None and stale["needs_regeneration"]
         assert len(db.list_overlays(session_id)) == 1  # Listing never regenerates sound.

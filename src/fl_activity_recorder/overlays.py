@@ -28,7 +28,6 @@ from .overlay_generator import (
     controls,
     generate_ambient,
     generate_drums,
-    session_baselines,
 )
 
 
@@ -110,7 +109,6 @@ class OverlayManager:
         self._cancel: dict[str, threading.Event] = {}
         self._futures: dict[str, tuple[str, Future[None]]] = {}
         self._audio_cache: OrderedDict[str, Any] = OrderedDict()
-        self._baseline_cache: OrderedDict[str, Any] = OrderedDict()
         self._feature_cache: OrderedDict[str, Any] = OrderedDict()
         self._closing = False
         self._readers: dict[str, int] = {}
@@ -230,32 +228,20 @@ class OverlayManager:
     def _features(
         self, session_id: str, item: dict[str, Any], detected: dict[str, Any], fingerprint: str
     ) -> Any:
-        """Reuse session baselines and audition controls for unchanged source fingerprints."""
-        key = _digest([fingerprint, item["id"], GENERATOR_VERSION, CONFIG])
+        """Cache interval-only controls and their normalization diagnostics."""
+        key = _digest([
+            fingerprint, item["id"], item["start_time"], item["end_time"],
+            GENERATOR_VERSION, CONFIG,
+        ])
         with self._lock:
             cached = self._feature_cache.get(key)
-            baseline = self._baseline_cache.get(fingerprint)
         if cached is not None:
             return cached
-        if baseline is None:
-            baseline = self._remember(
-                self._baseline_cache,
-                fingerprint,
-                session_baselines(self.signals, session_id, detected["duration"]),
-                8,
-            )
-        return self._remember(
-            self._feature_cache,
-            key,
-            controls(
-                self.signals,
-                session_id,
-                item["start_time"],
-                item["end_time"],
-                detected["duration"],
-                baseline,
-            ),
+        summary: dict[str, Any] = {}
+        curves, valid = controls(
+            self.signals, session_id, item["start_time"], item["end_time"], summary=summary
         )
+        return self._remember(self._feature_cache, key, (curves, valid, summary))
 
     def _validate(
         self,
@@ -296,10 +282,11 @@ class OverlayManager:
             )
             self._remember(self._audio_cache, key, True)
         checked = time.perf_counter()
-        _, valid = self._features(session_id, item, detected, fingerprint)
+        _, valid, normalization = self._features(session_id, item, detected, fingerprint)
         if preset == "ambient" and not (valid["HR"] or valid["EA"]):
             raise ValueError("No reliable HR or EDA data in this audition")
         item["channels"] = valid
+        item["normalization"] = normalization
         item["timings"] = {
             "validation_seconds": checked - started,
             "features_seconds": time.perf_counter() - checked,
@@ -321,6 +308,8 @@ class OverlayManager:
                         self.public(r)
                         for r in reversed(records)
                         if r["audition_id"] == item["id"]
+                        and r["start_time"] == item["start_time"]
+                        and r["end_time"] == item["end_time"]
                         and r["source_fingerprint"] == fingerprint
                         and r["generator_version"] == GENERATOR_VERSION
                         and r["config_hash"] == _digest(CONFIG)
@@ -404,6 +393,8 @@ class OverlayManager:
                 r
                 for r in self.database.list_overlays(session_id)
                 if r["audition_id"] == audition_id
+                and r["start_time"] == item["start_time"]
+                and r["end_time"] == item["end_time"]
                 and r["source_fingerprint"] == fingerprint
                 and r["preset"] == preset
                 and r["config_hash"] == _digest(CONFIG)
@@ -424,7 +415,8 @@ class OverlayManager:
                 raise RuntimeError("Overlay queue is full; retry after a task finishes")
             seed = secrets.randbits(32) if regenerate else 0
             key = _digest(
-                [session_id, audition_id, fingerprint, GENERATOR_VERSION, CONFIG, preset, seed]
+                [session_id, audition_id, item["start_time"], item["end_time"],
+                 fingerprint, GENERATOR_VERSION, CONFIG, preset, seed]
             )
             failed = next((r for r in matching if r["cache_key"] == key), None)
             record = {
@@ -473,7 +465,7 @@ class OverlayManager:
                 "start_time": record["start_time"],
                 "end_time": record["end_time"],
             }
-            curves, valid = self._features(session_id, item, detected, fingerprint)
+            curves, valid, normalization = self._features(session_id, item, detected, fingerprint)
             combined = record["preset"] == "physiological"
             stems = ["ambient", "drums"] if combined else ["ambient"]
             started = time.perf_counter()
@@ -510,6 +502,7 @@ class OverlayManager:
                 record.update(
                     status="ready",
                     channels=valid,
+                    normalization=normalization,
                     stems=stems,
                     stem_paths=paths,
                     relative_path=paths["ambient"],
@@ -563,5 +556,4 @@ class OverlayManager:
             if not self.database.delete_session(session_id):
                 raise KeyError(session_id)
             self._audio_cache.clear()
-            self._baseline_cache.clear()
             self._feature_cache.clear()

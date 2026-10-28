@@ -135,11 +135,16 @@ playback intervals. Choose an interval of 8 seconds to 5 minutes and click **Gen
 The local **Physiological Overlay** combines three mappings:
 
 - **HR → drums:** soft synthesized kick, tap and shaker follow recorded FL Studio BPM.
-  Heart rate relative to the session baseline controls velocity and eighth-note fills.
+  Heart rate relative to the selected audition controls velocity, four levels of eighth-note
+  fills, shorter/longer drum decays and tap/shaker brightness; kick tuning stays fixed.
 - **EDA → space:** smoothed skin response controls a short stereo reverb on the original
   recording as well as the added sounds. Missing EDA leaves the mix dry.
-- **Temperature → background:** temperature relative to the session baseline controls the
-  brightness and level of a non-tonal noise texture. Reliable T1 takes priority over TH.
+- **Temperature → background:** temperature relative to the selected audition controls
+  wind/surf brightness, level, swell depth/speed and stereo width. Reliable T1 takes priority over TH.
+
+Each audition uses its own smoothed median and P10–P90 range, with minimum-change
+thresholds to avoid amplifying sensor noise. Flat valid signals stay neutral and are labelled
+“Little change”; clips are not directly comparable as absolute physiological levels.
 
 Enable **Original + Overlay** to compare with the original. **Drums**, **Background**, and
 **Space** have separate controls, each initially 30%; changing them never regenerates audio.

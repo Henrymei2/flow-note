@@ -282,6 +282,12 @@ function renderOverlayControls(message) {
   const ready = !!overlayPreview.buffer;
   const busy = overlayPreview.loading;
   $("overlay-status").textContent = message;
+  const normalization = overlayPreview.record?.normalization || overlayPreview.audition?.normalization;
+  const quiet = Object.entries(normalization?.channels || {})
+    .filter(([, channel]) => channel.selected && channel.flat)
+    .map(([tag]) => ({HR: "HR", EA: "EDA", T1: "Temperature", TH: "Temperature"})[tag]);
+  $("overlay-mapping-status").hidden = normalization?.scope !== "audition";
+  $("overlay-mapping-status").textContent = `Mapping follows changes within this audition.${quiet.length ? " Little change: " + quiet.join(", ") + "; neutral mapping." : ""}`;
   $("overlay-generate").disabled = !overlayPreview.audition?.eligible || busy;
   $("overlay-regenerate").disabled = !overlayPreview.audition?.eligible || busy || !ready;
   $("overlay-mix").disabled = !ready;

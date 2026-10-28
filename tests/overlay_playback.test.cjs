@@ -240,6 +240,21 @@ test("both stems and original share EDA space; sliders and seek preserve isolati
   assert.equal(run("reviewAudio.bus.connections[0] === reviewAudio.context.destination"), true);
 });
 
+test("interval normalization reports only selected flat channels without disabling playback", () => {
+  const { element, run } = preview();
+  run(`overlayPreview.audition = { eligible: true, normalization: {
+      scope: 'audition', channels: {
+        HR: { selected: true, flat: true }, EA: { selected: true, flat: false },
+        T1: { selected: true, flat: true }, TH: { selected: false, flat: true }
+      }
+    } }; renderOverlayControls('Ready to generate');`);
+  assert.equal(element("overlay-mapping-status").hidden, false);
+  assert.equal(element("overlay-mapping-status").textContent,
+    "Mapping follows changes within this audition. Little change: HR, Temperature; neutral mapping.");
+  assert.equal(element("overlay-generate").disabled, false);
+  assert.equal(element("overlay-space").disabled, true);
+});
+
 test("EDA missing leaves original dry; enabling overlay disables independent heartbeat", async () => {
   const { element, run } = preview();
   run(`heartbeat.enabled = true;
