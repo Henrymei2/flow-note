@@ -1,21 +1,22 @@
 # FlowNote
 
-FlowNote is a wearable system that synchronizes a creator’s physiological data with their music revision history in [FL Studio](https://www.image-line.com/). It aligns [FL Studio events](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm), window recordings, and [EmotiBit](https://www.emotibit.com/) physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition. For stable physiological signal collection, please wear the Emobits on your forehead.
+FlowNote is a wearable system that synchronizes a creator’s physiological data with their music revision history in [FL Studio](https://www.image-line.com/). It aligns [FL Studio events](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm), window recordings, and [EmotiBit](https://www.emotibit.com/) physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition. For stable physiological signal collection, please wear the EmotiBit on your forehead.
 
 The project runs on macOS and Windows. A MIDI script observes FL Studio, and a Python companion stores sessions locally and serves the workspace at http://127.0.0.1:8765.
 
-## Requirements
+
+## Installation
+
+### Requirements
 
 | Component | Requirement |
 | --- | --- |
 | Operating system | macOS supported by FL Studio, or Windows 10/11 |
 | FL Studio | 26.1.3+ with MIDI scripting API 42+ |
 | Python | 3.12 or newer |
-| Browser | Desktop Google Chrome for window capture (Chrome's captured audio is optional for recording, but a usable recorded audio track is required for Overlay preview.) |
+| Browser | Desktop Google Chrome for window capture (audio capture is required for usable overlay preview.) |
 | Physiology | EmotiBit Oscilloscope 1.11.1+ with numeric LSL Output enabled |
 | Virtual MIDI | macOS IAC Driver, or loopMIDI on Windows |
-
-## Installation
 
 ```sh
 git clone https://github.com/Henrymei2/flow-note.git
@@ -75,8 +76,6 @@ In **Options → MIDI settings** on either platform:
 6. Open **View → Script output** and check that the observer initializes. The current
    contract is `schema=3 build=project-title-fallback-v1`.
 
-After an update, rerun the installer, reload the observer or restart FL Studio, and restart the companion. The dashboard blocks recording if the installed observer is out of date.
-
 ## Record and review
 
 1. Enable **LSL Output** in EmotiBit Oscilloscope. Stream names must start with `EmotiBit` (an [example](lslOutputSettings.example.json) is provided). See [reference](https://github.com/EmotiBit/EmotiBit_Docs/blob/master/EmotiBitOscilloscope_reference_manual.md).
@@ -85,19 +84,15 @@ After an update, rerun the installer, reload the observer or restart FL Studio, 
 4. Make music, then press **Stop recording**.
 5. Open the finished session to inspect its video, events, and physiological tracks.
 
-Select a suggested interval or drag across the timeline to add a note and labels. Saved moments appear in **History** and retain their connection to the original session. Notes and labels stay local and are excluded from research archives and cloud sharing.
+Select a suggested interval or drag across the timeline to add a note and labels. Saved moments appear in **History**.
+
+![screenshot of session review screen showing window recording, fl studio events, and physiological data on the same timeline](docs/fl1.png)
 
 ## Documentation
 
-- [Capture feasibility and boundaries](docs/feasibility.md)
-- [Observer protocol](docs/protocol.md)
-- [Unified timeline setup](docs/unified-timeline.md)
-- [Pattern suggestion algorithm](docs/pattern-suggestions.md)
-- [Physiological Overlay implementation](docs/physiological-overlays.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Real FL Studio validation](docs/real-fl-validation.md)
 - [Research archive sharing](docs/data-sharing.md)
-- [Privacy](docs/privacy.md)
 
-## Heloful Resources
-FL Studio API: https://forum.image-line.com/viewtopic.php?t=341668
+## Helpful Resources
+
+FL Studio API: https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm
