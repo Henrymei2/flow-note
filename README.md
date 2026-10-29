@@ -4,10 +4,7 @@ FlowNote is a wearable system that synchronizes a creator’s physiological data
 
 The project runs on macOS and Windows. A MIDI script observes FL Studio, and a Python companion stores sessions locally and serves the workspace at http://127.0.0.1:8765.
 
-
-## Installation
-
-### Requirements
+## Requirements
 
 | Component | Requirement |
 | --- | --- |
@@ -17,6 +14,8 @@ The project runs on macOS and Windows. A MIDI script observes FL Studio, and a P
 | Browser | Desktop Google Chrome for window capture (audio capture is required for usable overlay preview.) |
 | Physiology | EmotiBit Oscilloscope 1.11.1+ with numeric LSL Output enabled |
 | Virtual MIDI | macOS IAC Driver, or loopMIDI on Windows |
+
+## Installation
 
 ```sh
 git clone https://github.com/Henrymei2/flow-note.git
@@ -96,3 +95,4 @@ Select a suggested interval or drag across the timeline to add a note and labels
 ## Helpful Resources
 
 FL Studio API: https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm
+EmotiBit Oscilloscope Reference manual: https://github.com/EmotiBit/EmotiBit_Docs/blob/master/EmotiBitOscilloscope_reference_manual.md
