@@ -86,7 +86,7 @@ In **Options → MIDI settings** on either platform:
 
 Select a suggested interval or drag across the timeline to add a note and labels. Saved moments appear in **History**.
 
-![screenshot of session review screen showing window recording, fl studio events, and physiological data on the same timeline](docs/fl1.png)
+![screenshot of session review screen showing window recording, fl studio events, and physiological data on the same timeline. Choosing a pattern suggestion allows labeling and saving the moment, and choosing an audition section allows generating overlay sound effects based on physiological data](docs/fl1.png)
 
 ## Documentation
 
