@@ -1,6 +1,6 @@
 # FlowNote
 
-FlowNote is a recording and reflection tool for FL Studio. It alings FL Studio events, window recordings, and EmotiBit physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition.
+FlowNote is a recording and reflection tool for FL Studio. It aligns FL Studio events, window recordings, and EmotiBit physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition.
 
 The project runs on macOS and Windows. A MIDI script observes FL Studio, and a Python companion stores sessions locally and serves the workspace at http://127.0.0.1:8765.
 
