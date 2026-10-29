@@ -1,6 +1,6 @@
 # FlowNote
 
-FlowNote is a recording and reflection tool for FL Studio. It aligns FL Studio events, window recordings, and [EmotiBit](https://www.emotibit.com/) physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition.
+FlowNote is a recording and reflection tool for [FL Studio](https://www.image-line.com/). It aligns [FL Studio events](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm), window recordings, and [EmotiBit](https://www.emotibit.com/) physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition.
 
 The project runs on macOS and Windows. A MIDI script observes FL Studio, and a Python companion stores sessions locally and serves the workspace at http://127.0.0.1:8765.
 
@@ -79,7 +79,7 @@ After an update, rerun the installer, reload the observer or restart FL Studio, 
 
 ## Record and review
 
-1. Enable **LSL Output** in EmotiBit Oscilloscope. Stream names must start with `EmotiBit` (an [example](lslOutputSettings.example.json) is provided).
+1. Enable **LSL Output** in EmotiBit Oscilloscope. Stream names must start with `EmotiBit` (an [example](lslOutputSettings.example.json) is provided). See [reference](https://github.com/EmotiBit/EmotiBit_Docs/blob/master/EmotiBitOscilloscope_reference_manual.md).
 2. Open the local workspace in Chrome and wait for FL Studio and EmotiBit to connect.
 3. Press **Start recording** and choose the FL Studio window in Chrome's capture dialog.
 4. Make music, then press **Stop recording**.
