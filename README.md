@@ -1,6 +1,6 @@
 # FlowNote
 
-FlowNote is a recording and reflection tool for [FL Studio](https://www.image-line.com/). It aligns [FL Studio events](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm), window recordings, and [EmotiBit](https://www.emotibit.com/) physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition.
+FlowNote is a wearable system that synchronizes a creator’s physiological data with their music revision history in [FL Studio](https://www.image-line.com/). It aligns [FL Studio events](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/midi_scripting.htm), window recordings, and [EmotiBit](https://www.emotibit.com/) physiological signals onto one timeline, so you can revisit what you were doing, annotate a moment, and hear how your body signals change within an audition. For stable physiological signal collection, please wear the Emobits on your forehead.
 
 The project runs on macOS and Windows. A MIDI script observes FL Studio, and a Python companion stores sessions locally and serves the workspace at http://127.0.0.1:8765.
 
@@ -87,8 +87,6 @@ After an update, rerun the installer, reload the observer or restart FL Studio, 
 
 Select a suggested interval or drag across the timeline to add a note and labels. Saved moments appear in **History** and retain their connection to the original session. Notes and labels stay local and are excluded from research archives and cloud sharing.
 
-See [troubleshooting](docs/troubleshooting.md) for connection and capture problems.
-
 ## Documentation
 
 - [Capture feasibility and boundaries](docs/feasibility.md)
@@ -100,10 +98,6 @@ See [troubleshooting](docs/troubleshooting.md) for connection and capture proble
 - [Real FL Studio validation](docs/real-fl-validation.md)
 - [Research archive sharing](docs/data-sharing.md)
 - [Privacy](docs/privacy.md)
-
-## Help
-
-You can contact us by creating an [Issue](https://github.com/Henrymei2/flow-note/issues) or sending an email to [hmei24@wisc.edu](mailto:hmei24@wisc.edu)
 
 ## Heloful Resources
 FL Studio API: https://forum.image-line.com/viewtopic.php?t=341668
