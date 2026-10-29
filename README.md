@@ -104,3 +104,6 @@ See [troubleshooting](docs/troubleshooting.md) for connection and capture proble
 ## Help
 
 You can contact us by creating an [Issue](https://github.com/Henrymei2/flow-note/issues) or sending an email to [hmei24@wisc.edu](mailto:hmei24@wisc.edu)
+
+## Heloful Resources
+FL Studio API: https://forum.image-line.com/viewtopic.php?t=341668
