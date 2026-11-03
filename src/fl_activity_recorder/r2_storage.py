@@ -25,6 +25,7 @@ class R2Storage:
     """Upload immutable research archives and issue time-limited download URLs."""
 
     def __init__(self, settings: Settings, *, client: Any | None = None) -> None:
+        self.disabled = settings.disable_cloud_sharing
         self.account_id = settings.r2_account_id
         self.bucket = settings.r2_bucket_name
         self.access_key_id = settings.r2_access_key_id
@@ -38,7 +39,7 @@ class R2Storage:
 
     @property
     def configured(self) -> bool:
-        return all(
+        return not self.disabled and all(
             (
                 self.account_id,
                 self.bucket,

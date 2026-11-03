@@ -4,3 +4,4 @@ src/fl_activity_recorder/__pycache__/
 tests/__pycache__/
 fl_studio/ActivityRecorder/__pycache__/
 .env
+demo/

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-MIN_DURATION = 8.0
+MIN_DURATION = 0.0
 MAX_DURATION = 300.0
 DEFAULT_BPM = 100.0
 

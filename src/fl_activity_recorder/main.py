@@ -32,6 +32,7 @@ def main() -> None:
             r2_endpoint=settings.r2_endpoint,
             r2_region=settings.r2_region,
             r2_share_expiry_seconds=settings.r2_share_expiry_seconds,
+            disable_cloud_sharing=settings.disable_cloud_sharing,
         )
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, args=(f"http://127.0.0.1:{settings.port}",)).start()

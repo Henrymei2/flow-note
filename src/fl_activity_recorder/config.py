@@ -52,6 +52,7 @@ class Settings:
     r2_endpoint: str | None = None
     r2_region: str = "auto"
     r2_share_expiry_seconds: int = 7 * 24 * 60 * 60
+    disable_cloud_sharing: bool = False
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -84,4 +85,5 @@ class Settings:
             r2_share_expiry_seconds=int(
                 os.environ.get("R2_SHARE_EXPIRY_SECONDS", str(7 * 24 * 60 * 60))
             ),
+            disable_cloud_sharing=os.environ.get("FL_ACTIVITY_DISABLE_CLOUD_SHARING") == "1",
         )
