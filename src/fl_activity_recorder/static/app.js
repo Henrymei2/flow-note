@@ -135,28 +135,45 @@ function transportMarker(event) {
 // (most sessions only care about 3-4 of the dozen or so available signals).
 function renderTrackPicker() {
   const picker = $("track-picker"); picker.replaceChildren();
-  const recording = state.detail?.status === "recording"; const streams = recording ? state.liveDescriptors.map((item) => ({ type_tag: item.track_id, display_name: item.display_name, group_name: item.group_name, unit: item.unit })) : state.detail?.signals || [];
-  if (state.selectedTrackTags === null) state.selectedTrackTags = new Set(streams.filter((item) => ["EDA", "Heart"].includes(item.group_name)).map((item) => item.type_tag));
-  const known = new Set(streams.map((item) => item.type_tag));
-  for (const tag of state.selectedTrackTags) if (!known.has(tag)) state.selectedTrackTags.delete(tag);
+  const recording = state.detail?.status === "recording";
+  const candidates = recording
+    ? state.liveDescriptors.map((item) => ({ ...item, type_tag: item.track_id, metadata: item }))
+    : state.detail?.signals || [];
+  const byChannel = new Map();
+  for (const stream of candidates) {
+    const { source_id, stream_name, channel_index } = stream.metadata || {};
+    const key = source_id && stream_name && channel_index != null
+      ? JSON.stringify([source_id, stream_name, channel_index])
+      : stream.type_tag;
+    const current = byChannel.get(key);
+    if (!current || (stream.sample_count || 0) > (current.sample_count || 0)) {
+      byChannel.set(key, stream);
+    }
+  }
+  const streams = [...byChannel.values()];
+  const defaults = ["EA", "HR", "T1"].map((tag) => streams.find(
+    (stream) => (stream.metadata?.type_tag || stream.type_tag) === tag
+  )?.type_tag).filter(Boolean);
+  const selected = state.selectedTrackTags ?? new Set(defaults);
+  state.visibleTrackTags = [...selected].filter((tag) => streams.some((stream) => stream.type_tag === tag));
   for (const stream of streams) {
-    if (!state.selectedTrackTags.has(stream.type_tag)) continue;
+    if (!selected.has(stream.type_tag)) continue;
     const chip = document.createElement("span"); chip.className = "track-chip";
     chip.append(document.createTextNode(`${stream.display_name}${stream.unit ? ` (${stream.unit})` : ""}`));
     const remove = document.createElement("button"); remove.type = "button"; remove.className = "track-chip-remove"; remove.setAttribute("aria-label", `Remove ${stream.display_name}`); remove.textContent = "×";
-    remove.addEventListener("click", () => { state.selectedTrackTags.delete(stream.type_tag); renderTrackPicker(); });
+    remove.addEventListener("click", () => { selected.delete(stream.type_tag); state.selectedTrackTags = selected; renderTrackPicker(); });
     chip.append(remove); picker.append(chip);
   }
-  const remaining = streams.filter((item) => !state.selectedTrackTags.has(item.type_tag));
+  const remaining = streams.filter((item) => !selected.has(item.type_tag));
   const adder = document.createElement("select"); adder.className = "track-adder"; adder.disabled = remaining.length === 0;
   adder.append(new Option(remaining.length ? "+ Add track" : "All tracks added", ""));
   for (const stream of remaining) adder.append(new Option(`${stream.display_name}${stream.unit ? ` (${stream.unit})` : ""}`, stream.type_tag));
-  adder.addEventListener("change", () => { if (!adder.value) return; state.selectedTrackTags.add(adder.value); renderTrackPicker(); });
+  adder.addEventListener("change", () => { if (!adder.value) return; selected.add(adder.value); state.selectedTrackTags = selected; renderTrackPicker(); });
   picker.append(adder);
   recording ? renderLiveSignals() : loadTimeline();
 }
 
-function selectedTracks() { return [...(state.selectedTrackTags || [])]; }
+function selectedTracks() { return state.visibleTrackTags || []; }
 
 // The zoom slider is a continuous exponential control (like a video editor's
 // timeline zoom), not a handful of fixed presets: each whole step doubles how

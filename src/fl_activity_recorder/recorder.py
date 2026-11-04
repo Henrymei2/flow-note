@@ -370,9 +370,11 @@ class Recorder:
         if session_id is None:
             return
         observed = captured.observed
-        source_lsl = self.clock.monotonic_to_lsl(observed) if observed is not None else None
-        zero = _float_or_none(self.database.get_session(session_id).get("timeline_zero_lsl"))
-        received_lsl = self.clock.monotonic_to_lsl(captured.received)
+        session = self.database.get_session(session_id)
+        # Both event timestamps use the host monotonic clock. Anchor them at
+        # recording start so an older LSL offset cannot shift the event timeline.
+        zero = _float_or_none(session.get("timeline_zero_monotonic"))
+        event_time = observed if observed is not None else captured.received
         stored = self.database.add_event(
             session_id,
             captured.sequence,
@@ -381,10 +383,7 @@ class Recorder:
             captured.event,
             observed_monotonic_seconds=observed,
             received_monotonic_seconds=captured.received,
-            timeline_seconds=(
-                (source_lsl if source_lsl is not None else received_lsl) - zero
-                if zero is not None else None
-            ),
+            timeline_seconds=event_time - zero if zero is not None else None,
             transport_delay_ms=(captured.received - observed) * 1000
             if observed is not None else None,
             time_confidence="source" if observed is not None else "received",
